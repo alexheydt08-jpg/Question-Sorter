@@ -121,8 +121,27 @@
       <button type="button" class="btn primary" id="keysave">Save</button>
       <button type="button" class="btn danger hidden" id="keyforget">Forget</button>
     </div>
-    <p id="keynote">Stored in this browser only — never in the repository or the published page.
-      Get a key at console.anthropic.com and set a monthly spend limit while you're there.</p>
+    <p id="keynote">Marking needs your own Anthropic API key. It is kept in this browser only,
+      never in the repository or the published page.</p>
+    <details class="howto">
+      <summary>How do I get a key? — step by step</summary>
+      <ol>
+        <li>Go to <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com/settings/keys</a>
+            and sign in (or create an account — it is separate from a Claude subscription).</li>
+        <li>You need credit before a key will work: open
+            <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener">Billing</a>
+            and add some. A few dollars marks hundreds of questions.</li>
+        <li>While you are there, open
+            <a href="https://console.anthropic.com/settings/limits" target="_blank" rel="noopener">Limits</a>
+            and set a monthly spend cap. This is the safety net if a key ever leaks.</li>
+        <li>Back on the Keys page, press <b>Create Key</b>, name it <code>hsc-sorter</code>, and press Create.</li>
+        <li><b>Copy it now</b> — it starts <code>sk-ant-</code> and is shown only once.</li>
+        <li>Paste it in the box above and press <b>Save</b>. It is remembered in this browser,
+            so you only do this once per device.</li>
+      </ol>
+      <p class="note"><b>If marking fails:</b> "invalid x-api-key" means the key was mis-copied or deleted;
+         "credit balance is too low" means step 2 is outstanding.</p>
+    </details>
   </div>
   <button type="button" class="keysaved hidden" id="keyedit">
     <span class="tick" aria-hidden="true">✓</span> API key saved in this browser
@@ -294,13 +313,37 @@
           <div id="syncsetup">
             <p class="note" style="margin:0 0 10px">
               Keeps the same cards on every device, through a private GitHub repository you own.
-              Two things to set up once:<br>
-              1. Create a <b>private</b> repository on GitHub — any name, e.g. <code>hsc-flashcards</code> —
-                 and tick <b>Add a README file</b> so it is not completely empty.<br>
-              2. Make a <b>fine-grained personal access token</b> with <b>Contents: read and write</b>
-                 on that one repository, and paste it here. Each device needs its own token;
-                 point them all at the same repository.
+              No server, and nothing is shared with anyone else. Set it up once per device.
             </p>
+            <details class="howto" open>
+              <summary>Step by step — about two minutes</summary>
+              <ol>
+                <li><b>Make the store.</b> Go to <a href="https://github.com/new" target="_blank" rel="noopener">github.com/new</a>.
+                    Name it <code>hsc-flashcards</code>, choose <b>Private</b>, tick
+                    <b>Add a README file</b>, then <b>Create repository</b>.
+                    <span class="note">Tick the README — a repository with no files in it cannot be written to yet.
+                    Do this once, not once per device.</span></li>
+                <li><b>Make a token.</b> Go to
+                    <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a>
+                    (Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b>).</li>
+                <li>Name it <code>hsc-sorter-sync</code> and pick an expiry. When it expires syncing stops
+                    and you make a new one.</li>
+                <li>Under <b>Repository access</b> choose <b>Only select repositories</b> and pick
+                    <b>hsc-flashcards</b>.
+                    <span class="note">A token can only ever reach repositories chosen here. One made
+                    before the repository existed will not see it.</span></li>
+                <li>Under <b>Permissions → Repository permissions</b>, find <b>Contents</b> and set it to
+                    <b>Read and write</b>. Leave everything else alone.
+                    <span class="note">This is the step most easily missed, and without it syncing
+                    cannot save anything.</span></li>
+                <li>Press <b>Generate token</b> and copy it. It starts <code>github_pat_</code>
+                    and is shown only once.</li>
+                <li>Fill the two boxes below — repository <code>your-username/hsc-flashcards</code>,
+                    then the token — and press <b>Connect</b>.</li>
+              </ol>
+              <p class="note"><b>On another device:</b> repeat steps 2–7 only. Same repository, its own
+                 token. Its first sync pulls everything down.</p>
+            </details>
             <div class="keyrow">
               <input id="syncrepo" type="text" placeholder="owner/repository" autocomplete="off" spellcheck="false">
               <input id="synctoken" type="password" placeholder="github_pat_…" autocomplete="off" spellcheck="false">

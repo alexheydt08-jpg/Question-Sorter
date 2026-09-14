@@ -138,9 +138,11 @@ function paintKey(){
   const saved = readKey();
   if (saved && !$("#key").value) $("#key").value = saved;
   $("#keyforget").classList.toggle("hidden", !saved);
+  /* acquiring a key is covered by the step-by-step below, so this line only
+     has to say where the key lives */
   $("#keynote").textContent = saved
     ? "A key is saved in this browser. It is never committed or built into the published page — add it again on each device you use."
-    : "Stored in this browser only — never in the repository or the published page. Get a key at console.anthropic.com and set a monthly spend limit while you're there.";
+    : "Marking needs your own Anthropic API key. It is kept in this browser only, never in the repository or the published page.";
   const collapse = saved && !keyOpen;
   $("#keystrip").classList.toggle("hidden", collapse);
   $("#keyedit").classList.toggle("hidden", !collapse);

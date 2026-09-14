@@ -91,6 +91,36 @@ async function getFile(path){
   return { content: (j.content || "").replace(/\n/g, ""), sha: j.sha };
 }
 
+
+/* GitHub answers 404 for a private repository a token cannot see, exactly as
+   it does for one that is not there — it will not confirm that a private
+   repository exists to someone who cannot read it. So "not found" covers three
+   different mistakes, and guessing between them wastes the user's time. Ask the
+   token who it belongs to and narrow it down. */
+async function repoProblem(){
+  const [owner, name] = syncRepo().split("/");
+  let who = null;
+  try {
+    const r = await fetch(API + "/user", {
+      headers: { "Authorization": `Bearer ${syncToken()}`, "Accept": "application/vnd.github+json" },
+    });
+    if (r.ok) who = (await r.json()).login;
+  } catch {}
+
+  if (!who)
+    return "GitHub rejected the token. Check it was pasted whole and has not expired.";
+
+  if (who.toLowerCase() !== (owner || "").toLowerCase())
+    return `That token belongs to the GitHub account "${who}", but you asked for a repository under "${owner}". `
+      + `Either fix the owner to "${who}/${name || "repository"}", or use a token from the account that owns it.`;
+
+  return `Signed in as "${who}", but "${syncRepo()}" is not visible to this token. Two usual causes: `
+    + "the repository does not exist yet — create it, private, with a README; "
+    + "or the token cannot reach it. A fine-grained token only reaches repositories picked when it was created, "
+    + "so one made before the repository existed will not see it. "
+    + "Check github.com/settings/tokens → your token → Repository access, and that Permissions include Contents: read and write.";
+}
+
 async function putFile(path, base64, message){
   const send = sha => ghFetch(`/repos/${syncRepo()}/contents/${encodeURI(path)}`, {
     method: "PUT",
@@ -105,12 +135,12 @@ async function putFile(path, base64, message){
   }
   if (res.status === 404){
     /* A brand new repository with no commits has no default branch, so writing
-       a file into it 404s exactly like a wrong name would. Tell those apart
-       rather than sending someone to check a repo name that is already right. */
+       a file into it 404s exactly like a wrong name would. */
     const probe = await ghFetch(`/repos/${syncRepo()}`);
-    throw new SyncError(probe.ok
-      ? "The repository is empty, so there is nothing to write into yet. Open it on GitHub, add a README (Add file → Create new file → Commit), then sync again."
-      : "Repository not found. Check owner/name, and that the token grants access to it.");
+    if (probe.ok)
+      throw new SyncError("The repository is empty, so there is nothing to write into yet. "
+        + "Open it on GitHub, add a README (Add file → Create new file → Commit), then sync again.");
+    throw new SyncError(await repoProblem());
   }
   if (!res.ok) throw new SyncError(`GitHub returned ${res.status} writing ${path}.`);
   const j = await res.json();

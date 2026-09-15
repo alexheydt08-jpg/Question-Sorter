@@ -263,8 +263,10 @@ function paintAddAll(){
 }
 
 /* Nearly half the questions — almost every trial paper — came without
-   solutions of any kind, so there is nothing to put on the back. */
-const hasSolutions = r => !!((r.mgImages || []).length || r.answer || r.mgText);
+   solutions of any kind, so there is nothing to put on the back. What counts
+   is what the card would actually show: the guideline crops and the answer
+   letter. */
+const hasSolutions = r => !!((r.mgImages || []).length || r.answer);
 
 async function addToBank(rec, btn, ownBack){
   const api = window.cardsAPI;

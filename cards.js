@@ -178,8 +178,12 @@ function cardFromQuestion(rec){
   const c = blankCard(rec.subject);
   c.id = questionCardId(rec.id);
   const origin = rec.source === "Trial" ? `${rec.school} trial` : "HSC";
+  /* The crop is the question. rec.questionText is the PDF's own text layer,
+     which comes out of a scanned diagram or a multiple choice as scrambled
+     fragments — so the front carries a line saying which question this is, and
+     then the images. */
   c.front = {
-    text: `${rec.year} ${origin} ${rec.subject} Q${rec.questionNumber} — ${(rec.questionText || "").slice(0, 150)}`.trim(),
+    text: `${rec.year} ${origin} ${rec.subject} Q${rec.questionNumber}`,
     images: (rec.questionImages || []).map(p => ({ kind: "repo", src: p })),
   };
   /* "Correct answer", matching what Browse already prints under a multiple
@@ -187,7 +191,10 @@ function cardFromQuestion(rec){
      win now that both build the card here. */
   c.back = { text: "", images: (rec.mgImages || []).map(p => ({ kind: "repo", src: p })) };
   if (rec.section === "I" && rec.answer) c.back.text = `Correct answer: ${rec.answer}`;
-  if (rec.mgText) c.back.text = (c.back.text ? c.back.text + "\n\n" : "") + rec.mgText;
+  /* rec.mgText is the same scraped text for the guidelines, and every record
+     that has it has the guideline crop as well, so it would only repeat the
+     image badly. The answer letter stays: it is a fact, not scraped text, and
+     for a multiple choice with no guidelines it is the whole back. */
 
   c.tags = [rec.source === "Trial" ? "Trial" : "HSC",
             rec.year && String(rec.year), rec.school].filter(Boolean);

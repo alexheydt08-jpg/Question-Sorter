@@ -54,11 +54,7 @@
           </div>
           <div class="fgroup"><span class="lbl">Year</span><span id="years"></span></div>
           <div class="fgroup"><span class="lbl">Section</span>
-            <select id="section" aria-label="Section">
-              <option value="">All</option>
-              <option value="I">I — Multiple choice</option>
-              <option value="II">II — Extended response</option>
-            </select>
+            <select id="section" aria-label="Section"></select>
           </div>
           <div class="fgroup"><span class="lbl">Marks</span>
             <select id="marks" aria-label="Marks">
@@ -95,10 +91,10 @@
         <label><b>Multiple choice</b>1 mark each
           <input type="number" inputmode="numeric" id="ptmc" min="0" max="40" value="5">
           <span class="pt-avail" id="avmc"></span></label>
-        <label><b>Short answer</b>2–4 mark questions
+        <label><b>Short answer</b><span id="ptshortcap">2–4 mark questions</span>
           <input type="number" inputmode="numeric" id="ptshort" min="0" max="80" value="15">
           <span class="pt-avail" id="avshort"></span></label>
-        <label><b>Long response</b>5+ mark questions
+        <label><b>Extended response</b><span id="ptextcap">5+ mark questions</span>
           <input type="number" inputmode="numeric" id="ptext" min="0" max="80" value="20">
           <span class="pt-avail" id="avext"></span></label>
       </div>

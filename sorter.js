@@ -54,6 +54,60 @@ DATA.forEach(r => {
     (r.tags || []).map(t => `${t.module} ${t.topic} ${t.iq}`).join(" ")).toLowerCase();
 });
 
+/* ---------- what kind of question this is -------------------------------- *
+   Three kinds matter to a student: multiple choice, short answer, and the
+   extended response. How a paper divides them differs by subject, and the
+   paper itself is the authority.
+
+   Economics runs four sections — twenty multiple choice, four ten-mark short
+   answers in Section II, then a twenty-mark essay chosen from each of
+   Sections III and IV — so its split is by section. Chemistry and Physics
+   print two sections and put everything from a two-mark question to a
+   nine-mark one inside Section II, so theirs is by marks.
+
+   Reading it off the section where the paper gives more than two, and off the
+   marks where it does not, gets both right without naming either subject.
+   Before this, every non-multiple-choice question was "Section II — extended
+   response": Economics essays were mislabelled, and its ten-mark short
+   answers were pooled with twenty-mark essays, which left the practice-test
+   builder's short-answer pool permanently empty. */
+const ESSAY_SUBJECTS = new Set(
+  DATA.filter(r => r.section === "III" || r.section === "IV").map(r => r.subject));
+
+function qKind(r){
+  if (r.section === "I") return "mc";
+  if (r.section === "III" || r.section === "IV") return "ext";
+  if (ESSAY_SUBJECTS.has(r.subject)) return "short";   // its Section II is short answer
+  return r.marks >= 5 ? "ext" : "short";
+}
+
+const KIND_LABEL = { mc:"multiple choice", short:"short answer", ext:"extended response" };
+
+/* The sections this subject actually has, in order, for the Browse filter. */
+const SECTION_ORDER = ["I", "II", "III", "IV"];
+function subjectSections(){
+  const seen = new Set(DATA.filter(r => r.subject === APP.subject).map(r => r.section));
+  return SECTION_ORDER.filter(x => seen.has(x));
+}
+
+/* The section filter is built from the subject rather than written into the
+   markup, which offered Chemistry's two sections to every subject and so gave
+   no way to ask for Economics essays at all. Each option is named by what is
+   in it, because "Section III" alone means nothing until you know the paper. */
+function renderSectionFilter(){
+  const el = document.getElementById("section");
+  if (!el) return;
+  const secs = subjectSections();
+  const kindOf = sec => {
+    const rs = DATA.filter(r => r.subject === APP.subject && r.section === sec);
+    const kinds = new Set(rs.map(qKind));
+    return kinds.size === 1 ? KIND_LABEL[[...kinds][0]] : "short and extended response";
+  };
+  el.innerHTML = `<option value="">All</option>` +
+    secs.map(x => `<option value="${x}">${x} — ${kindOf(x)}</option>`).join("");
+  el.value = secs.includes(state.section) ? state.section : (state.section = "");
+}
+
 const state = { module:null, iq:null, q:"", years:new Set(), section:"", marks:"",
                 source:"", school:"", openMods:new Set() };
 
@@ -174,7 +228,7 @@ function card(r){
     <div class="qhead">
       <span class="qtitle">${esc(origin)} · Q${r.questionNumber}</span>
       ${r.marks ? `<span class="marksq">${r.marks} mark${r.marks === 1 ? "" : "s"}</span>` : ""}
-      <span class="badge">Section ${r.section} — ${r.section === "I" ? "multiple choice" : "extended response"}</span>
+      <span class="badge">Section ${r.section} — ${KIND_LABEL[qKind(r)]}</span>
       <span class="badge${isTrial ? " trial" : ""}">${isTrial ? "Trial paper" : "NESA HSC"}</span>
       ${isTrial && (r.confidence === "med" || r.confidence === "low") ? `<span class="badge auto" title="Topic assigned automatically from the question text and the syllabus — likely right, but check it">auto-tagged</span>` : ""}
     </div>
@@ -271,6 +325,7 @@ $("#navtoggle").onclick = () => {
 
 function renderAll(){ renderYears(); renderTree(); renderResults(); }
 renderSchools();
+renderSectionFilter();
 
 /* ==========================================================================
    PRACTICE TEST
@@ -282,9 +337,9 @@ function shuffle(a){ a = a.slice(); for (let i=a.length-1;i>0;i--){ const j=rint
 function ptPools(){
   const pool = DATA.filter(r => r.subject === APP.subject && r.tags.some(t => PT.checked.has(t.iq)));
   return {
-    mc: pool.filter(r => r.section === "I"),
-    short: pool.filter(r => r.section === "II" && r.marks <= 4),
-    ext: pool.filter(r => r.section === "II" && r.marks >= 5)
+    mc:    pool.filter(r => qKind(r) === "mc"),
+    short: pool.filter(r => qKind(r) === "short"),
+    ext:   pool.filter(r => qKind(r) === "ext")
   };
 }
 
@@ -308,8 +363,34 @@ function ptUpdateMeta(){
   $("#ptgen").disabled = !PT.checked.size || !tot;
 }
 
+/* The builder described its two non-multiple-choice buckets as "2–4 mark
+   questions" and "5+ mark questions", which is how Chemistry and Physics
+   divide Section II but says nothing true about Economics, whose short
+   answers are ten marks and whose essays are twenty. Describe each bucket by
+   what the subject actually holds. */
+function ptRenderCaptions(){
+  /* Described from everything the subject has, not from the topics ticked so
+     far, so the caption reads the same before and after a selection. */
+  const all = DATA.filter(r => r.subject === APP.subject);
+  const p = { short: all.filter(r => qKind(r) === "short"),
+              ext:   all.filter(r => qKind(r) === "ext") };
+  const range = rs => {
+    /* Zero means the mark count could not be read off the paper, not a
+       zero-mark question, so it would otherwise report every subject as
+       starting at 0. */
+    const m = rs.map(r => r.marks).filter(x => x > 0);
+    if (!m.length) return "none available";
+    const lo = Math.min(...m), hi = Math.max(...m);
+    return lo === hi ? `${lo} mark${lo === 1 ? "" : "s"} each` : `${lo}–${hi} mark questions`;
+  };
+  const set = (id, txt) => { const e = $("#"+id); if (e) e.textContent = txt; };
+  set("ptshortcap", range(p.short));
+  set("ptextcap", range(p.ext));
+}
+
 function ptRenderTree(){
   $("#ptsubj").textContent = APP.subject;
+  ptRenderCaptions();
   /* the catch-all bucket is deliberately absent here: a practice test is built
      by topic, and untagged questions match no topic, so offering it would only
      ever yield an empty paper. They stay reachable from Browse. */
@@ -357,7 +438,13 @@ function ptGenerate(){
   const mc = shuffle(p.mc).slice(0, mcN);
   const short = allocate(p.short, +$("#ptshort").value||0);
   const ext = allocate(p.ext, +$("#ptext").value||0);
-  const sii = short.concat(ext).sort((a,b) => a.marks - b.marks || b.year - a.year);
+  /* Kept as three lists, not two. Pouring short answers and extended responses
+     into one "Section II" printed a ten-mark Economics short answer and a
+     twenty-mark essay under the same heading, and sorted an essay in among
+     them by mark count. */
+  const byMark = (a,b) => a.marks - b.marks || b.year - a.year;
+  short.sort(byMark); ext.sort(byMark);
+  const sii = short.concat(ext);
   const total = mc.length + sii.reduce((s,r) => s+r.marks, 0);
   if (!total){
     $("#pttotal").innerHTML = `<span style="color:var(--pen)">No questions matched — select more topics or increase the marks.</span>`;
@@ -394,7 +481,20 @@ function ptGenerate(){
       <div class="src">Source: ${origin(r)} ${esc(r.subject)} · Q${r.questionNumber}</div>${imgs}</div>`;
   };
   const mcHtml = mc.map(qhtml).join("");
-  const siiHtml = sii.map(qhtml).join("");
+  const shortHtml = short.map(qhtml).join("");
+  const extHtml = ext.map(qhtml).join("");
+
+  /* Sections are numbered over the parts that actually have questions, so a
+     test of essays alone is "Section I", not "Section III" with nothing
+     before it. */
+  const roman = ["I", "II", "III"];
+  let sn = 0;
+  const sec = (rows, title, sub) => {
+    if (!rows.length) return "";
+    return `<div class="pt-sechdr">Section ${roman[sn++]} — ${title}</div>
+      <p class="pt-secsub">${sub}</p>`;
+  };
+  const marksOf = rs => rs.reduce((s,r) => s+r.marks, 0);
 
   let an = 0;
   const ahtml = r => {
@@ -427,15 +527,18 @@ function ptGenerate(){
         <h2>Practice Test</h2>
         <div class="pt-meta">
           <div><b>Total marks:</b> ${total}</div>
-          <div><b>Questions:</b> ${mc.length} multiple choice · ${sii.length} extended response</div>
+          <div><b>Questions:</b> ${[[mc,"multiple choice"],[short,"short answer"],[ext,"extended response"]]
+                .filter(([rs]) => rs.length).map(([rs,lab]) => `${rs.length} ${lab}`).join(" · ")}</div>
           <div><b>Recommended time:</b> ${ptTime(total)} (plus 5 minutes reading time)</div>
         </div>
         <div class="pt-topics"><h4 style="text-align:center">Topics included</h4>${topicsHtml}</div>
       </div>
-      ${mc.length ? `<div class="pt-sechdr">Section I — Multiple choice</div>
-        <p class="pt-secsub">${mc.length} marks · Attempt Questions 1–${mc.length} · Allow about ${ptTime(mc.length)} for this section</p>${mcHtml}` : ""}
-      ${sii.length ? `<div class="pt-sechdr">Section ${mc.length?"II":"I"} — Extended response</div>
-        <p class="pt-secsub">${sii.reduce((s,r)=>s+r.marks,0)} marks · Show all relevant working in questions involving calculations</p>${siiHtml}` : ""}
+      ${sec(mc, "Multiple choice",
+            `${mc.length} marks · Attempt Questions 1–${mc.length} · Allow about ${ptTime(mc.length)} for this section`)}${mcHtml}
+      ${sec(short, "Short answer",
+            `${marksOf(short)} marks · Allow about ${ptTime(marksOf(short))} for this section · Show all relevant working in questions involving calculations`)}${shortHtml}
+      ${sec(ext, "Extended response",
+            `${marksOf(ext)} marks · Allow about ${ptTime(marksOf(ext))} for this section · Plan your answer before you begin writing`)}${extHtml}
       <div class="pt-ans-start"></div>
       <div class="pt-sechdr">Answer sheet — marking guidelines &amp; sample answers</div>
       <p class="pt-secsub">Marking guidelines and sample answers for every question in this test — NESA's for HSC questions, the school's own for trial questions. Mark yourself honestly, or send a question to the marker.</p>
@@ -481,6 +584,7 @@ document.addEventListener("keydown", e => {
 APP.onSubject.push(() => {
   state.module = null; state.iq = null; state.openMods = new Set();
   renderSchools();
+  renderSectionFilter();
   /* topics belong to one subject, so drop picks that no longer exist */
   [...PT.checked].forEach(iq => {
     const ok = Object.keys(TAX[APP.subject] || {}).some(m => TAX[APP.subject][m][iq]);

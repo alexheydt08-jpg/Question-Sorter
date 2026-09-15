@@ -10,8 +10,85 @@
 
 const MAX_TOKENS = 4000;
 const MAX_FILE_MB = 28;
-const KEY_STORAGE = "hsc-marker-key";
 const UNSET = "Not set";
+
+/* ---------- providers ----------------------------------------------------
+   Two APIs, one marking prompt. Everything that differs between them lives
+   here so the rest of the file never asks which one is in use.
+
+   The keys are stored under separate names deliberately: switching provider
+   must not throw away the other key, and Anthropic keeps its original name so
+   nobody has to paste a saved key again.
+
+   `images: false` is not a detail. DeepSeek's chat models read text only,
+   while this marker's whole point is showing the model the actual question
+   crop, so a question that exists only as a picture cannot be marked by it —
+   see markableWith() below.
+   -------------------------------------------------------------------------- */
+const PROVIDERS = {
+  anthropic: {
+    label: "Anthropic (Claude)",
+    keyStorage: "hsc-marker-key",
+    hint: "sk-ant-…",
+    images: true,
+    console: "https://console.anthropic.com/settings/keys",
+    models: [
+      ["claude-opus-5", "Opus 5"],
+      ["claude-sonnet-5", "Sonnet 5"],
+      ["claude-haiku-4-5-20251001", "Haiku 4.5"]
+    ],
+    url: "https://api.anthropic.com/v1/messages",
+    headers: key => ({
+      "content-type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    }),
+    body: (model, system, content) => ({
+      model, max_tokens: MAX_TOKENS, system,
+      messages: [{ role: "user", content }]
+    }),
+    read: data => ({
+      text: (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim(),
+      cut: data.stop_reason === "max_tokens"
+    })
+  },
+  deepseek: {
+    label: "DeepSeek",
+    keyStorage: "hsc-marker-key-deepseek",
+    hint: "sk-…",
+    images: false,
+    console: "https://platform.deepseek.com/api_keys",
+    models: [
+      ["deepseek-chat", "DeepSeek Chat"],
+      ["deepseek-reasoner", "DeepSeek Reasoner"]
+    ],
+    url: "https://api.deepseek.com/chat/completions",
+    headers: key => ({
+      "content-type": "application/json",
+      "authorization": `Bearer ${key}`
+    }),
+    body: (model, system, content) => ({
+      model, max_tokens: MAX_TOKENS,
+      messages: [{ role: "system", content: system },
+                 { role: "user", content }]
+    }),
+    read: data => {
+      const c = (data.choices || [])[0] || {};
+      return { text: (c.message?.content || "").trim(),
+               cut: c.finish_reason === "length" };
+    }
+  }
+};
+
+const article = w => /^[AEIOU]/i.test(w) ? "An" : "A";
+const PROVIDER_STORAGE = "hsc-marker-provider";
+const readProvider = () => {
+  try { const v = localStorage.getItem(PROVIDER_STORAGE); if (PROVIDERS[v]) return v; } catch {}
+  return "anthropic";
+};
+let provider = readProvider();
+const P = () => PROVIDERS[provider];
 
 /* Modules as named in the NESA Stage 6 syllabuses. Adding a subject means
    adding an entry here and a button to the subject group in the header. */
@@ -127,7 +204,9 @@ const SLOTS = ["question","answer","combined","paper","paperanswer","guidelines"
 const files = Object.fromEntries(SLOTS.map(s => [s, []]));
 
 /* ---------- API key ------------------------------------------------------ */
-const readKey = () => { try { return localStorage.getItem(KEY_STORAGE) || ""; } catch { return ""; } };
+const readKey = (which = provider) => {
+  try { return localStorage.getItem(PROVIDERS[which].keyStorage) || ""; } catch { return ""; }
+};
 const getKey  = () => ($("#key").value || readKey()).trim();
 
 /* The key matters once, at setup. After that it is noise at the top of every
@@ -135,33 +214,101 @@ const getKey  = () => ($("#key").value || readKey()).trim();
 let keyOpen = false;
 
 function paintKey(){
+  const p = P();
   const saved = readKey();
-  if (saved && !$("#key").value) $("#key").value = saved;
+  /* The field always shows the current provider's key, never the other's. */
+  $("#key").value = saved;
+  $("#key").placeholder = p.hint;
+  $("#provider").value = provider;
   $("#keyforget").classList.toggle("hidden", !saved);
   /* acquiring a key is covered by the step-by-step below, so this line only
      has to say where the key lives */
   $("#keynote").textContent = saved
-    ? "A key is saved in this browser. It is never committed or built into the published page — add it again on each device you use."
-    : "Marking needs your own Anthropic API key. It is kept in this browser only, never in the repository or the published page.";
+    ? `${article(p.label)} ${p.label} key is saved in this browser. It is never committed or built into the published page — add it again on each device you use.`
+    : `Marking needs your own ${p.label} API key. It is kept in this browser only, never in the repository or the published page.`;
+  const other = Object.entries(PROVIDERS).filter(([k]) => k !== provider && readKey(k));
+  $("#keyother").textContent = other.length
+    ? `${article(other[0][1].label)} ${other[0][1].label} key is also saved and is kept when you switch.` : "";
+  const lbl = $("#keysavedlabel");
+  if (lbl) lbl.textContent = `${p.label} key saved in this browser`;
   const collapse = saved && !keyOpen;
   $("#keystrip").classList.toggle("hidden", collapse);
   $("#keyedit").classList.toggle("hidden", !collapse);
+  paintModels();
+  $("#keytest").textContent = "Test connection";
+  $("#keytest").disabled = false;
 }
+
+/* The model list belongs to the provider; keep whatever was selected if that
+   model still exists, otherwise fall back to the provider's first. */
+function paintModels(){
+  const sel = $("#model"), want = sel.value;
+  sel.innerHTML = "";
+  for (const [value, label] of P().models){
+    const o = document.createElement("option");
+    o.value = value; o.textContent = label;
+    sel.appendChild(o);
+  }
+  if ([...sel.options].some(o => o.value === want)) sel.value = want;
+}
+
+/* The one question that cannot be answered from a sandbox: will a browser let
+   this page call that host at all? One real request settles it, and separates
+   "blocked" from "bad key" from "no balance". */
+$("#keytest").onclick = async () => {
+  const p = P(), key = getKey(), btn = $("#keytest");
+  if (!key){ $("#keynote").textContent = "Enter a key first, then test it."; return; }
+  btn.disabled = true; btn.textContent = "Testing…";
+  let res;
+  try {
+    res = await fetch(p.url, {
+      method: "POST",
+      headers: p.headers(key),
+      body: JSON.stringify(p.body(p.models[0][0], "Reply with OK.", p.images
+        ? [{ type: "text", text: "Reply with OK." }] : "Reply with OK."))
+    });
+  } catch {
+    $("#keynote").textContent =
+      `Could not reach ${p.label}. Either you are offline, or your browser blocked the request because ${new URL(p.url).host} does not allow calls from a web page — in which case this provider cannot be used from this site.`;
+    btn.disabled = false; btn.textContent = "Test connection";
+    return;
+  }
+  let detail = "";
+  try { detail = (await res.json())?.error?.message || ""; } catch {}
+  $("#keynote").textContent =
+      res.ok              ? `Connected. ${p.label} accepted the key and is ready to mark.`
+    : res.status === 401  ? "That key was rejected. Check it is current and has not been revoked."
+    : res.status === 402  ? `The key works, but this ${p.label} account has no balance. Top it up before marking.`
+    : res.status === 429  ? "The key works, but you are rate limited right now."
+    : /credit|balance/i.test(detail) ? `The key works, but this account has no credit. Top it up before marking.`
+    : `${p.label} answered ${res.status}. ${detail}`.trim();
+  btn.disabled = false; btn.textContent = "Test connection";
+};
+
+$("#provider").onchange = () => {
+  provider = $("#provider").value;
+  try { localStorage.setItem(PROVIDER_STORAGE, provider); } catch {}
+  keyOpen = !readKey();
+  paintKey();
+  paintImageNote();
+};
 
 $("#keyedit").onclick = () => { keyOpen = true; paintKey(); $("#key").focus(); };
 $("#keysave").onclick = () => {
   const v = $("#key").value.trim();
-  try { v ? localStorage.setItem(KEY_STORAGE, v) : localStorage.removeItem(KEY_STORAGE); } catch {}
+  const slot = P().keyStorage;
+  try { v ? localStorage.setItem(slot, v) : localStorage.removeItem(slot); } catch {}
   keyOpen = false;
   paintKey();
 };
 $("#keyforget").onclick = () => {
-  try { localStorage.removeItem(KEY_STORAGE); } catch {}
+  try { localStorage.removeItem(P().keyStorage); } catch {}
   $("#key").value = "";
   keyOpen = true;
   paintKey();
 };
 paintKey();
+paintImageNote();
 
 /* ---------- mode tabs ---------------------------------------------------- */
 $$(".modes button").forEach(b => b.addEventListener("click", () => {
@@ -402,44 +549,80 @@ async function buildContent(){
 }
 
 /* ---------- API ---------------------------------------------------------- */
+
+/* Anthropic takes a list of typed blocks; DeepSeek takes a plain string and
+   reads no pictures at all. Flattening drops the attachments and says how many
+   went, so the reader is told rather than left wondering why a marked photo
+   was ignored. */
+function flattenForText(content){
+  const parts = [];
+  let dropped = 0;
+  for (const b of content){
+    if (b.type === "text") parts.push(b.text);
+    else dropped++;
+  }
+  return { text: parts.join("\n\n"), dropped };
+}
+
+/* Whether the current provider can actually see this question.
+
+   Judged from what was typed, not from the flattened prompt: every attachment
+   still contributes a heading like "QUESTION:\n[Attached below]", so measuring
+   the text's length reads those placeholders as content and cheerfully marks a
+   question the model never saw. */
+function markableWith(content){
+  const dropped = flattenForText(content).dropped;
+  if (P().images) return { ok: true, dropped: 0 };
+  const has = id => !!$(id).value.trim();
+  if (mode === "combined")
+    return { ok: false, dropped, why: "the question and your answer are both inside the attached file" };
+  if (mode === "paper")
+    return has("#pa")
+      ? { ok: false, dropped, why: "the exam paper itself is an attachment, so the question cannot be read" }
+      : { ok: false, dropped, why: "the exam paper and your answer are attachments" };
+  if (!has("#mq"))
+    return { ok: false, dropped, why: "the question is only attached as a file" };
+  if (!has("#ma"))
+    return { ok: false, dropped, why: "your answer is only attached as a file" };
+  return { ok: true, dropped };
+}
+
 async function callApi(key, model, content, signal){
+  const p = P();
+  let payload = content;
+  if (!p.images) payload = flattenForText(content).text;
+
   let res;
   try {
-    res = await fetch("https://api.anthropic.com/v1/messages", {
+    res = await fetch(p.url, {
       method:"POST", signal,
-      headers:{
-        "content-type":"application/json",
-        "x-api-key":key,
-        "anthropic-version":"2023-06-01",
-        "anthropic-dangerous-direct-browser-access":"true"
-      },
-      body: JSON.stringify({
-        model, max_tokens: MAX_TOKENS,
-        system: systemPrompt(APP.subject, hasGuidelines()),
-        messages:[{ role:"user", content }]
-      })
+      headers: p.headers(key),
+      body: JSON.stringify(p.body(model, systemPrompt(APP.subject, hasGuidelines()), payload))
     });
   } catch (e){
     if (e.name === "AbortError") throw e;
-    throw new Error("Could not reach the API. Check your internet connection, then mark again.");
+    /* A browser refusing the request for cross-origin reasons throws exactly
+       the same TypeError as being offline. Naming both beats a wrong guess. */
+    throw new Error(`Could not reach ${p.label}. Either you are offline, or your browser blocked the request because ${new URL(p.url).host} does not allow calls from a web page. The browser console will say which.`);
   }
 
   if (!res.ok){
     let detail = "";
     try { detail = (await res.json())?.error?.message || ""; } catch {}
     if (res.status === 401) throw new Error("That key was rejected. Check it is current and has not been revoked.");
+    if (res.status === 402) throw new Error(`This ${P().label} account has no balance left. Top it up, then mark again.`);
     if (res.status === 403) throw new Error("That key is not permitted to use this model. Try a different model.");
     if (res.status === 429) throw new Error("Rate limit reached. Wait a moment, then mark again.");
     if (res.status === 413) throw new Error("The attachments are too large. Remove a file or use a smaller scan.");
-    if (res.status >= 500)  throw new Error("The API is having trouble right now. Try again shortly.");
-    if (/credit|balance/i.test(detail)) throw new Error("This account has no credit left. Top it up in the Anthropic Console.");
+    if (res.status >= 500)  throw new Error(`${P().label} is having trouble right now. Try again shortly.`);
+    if (/credit|balance/i.test(detail)) throw new Error(`This account has no credit left. Top it up in the ${P().label} console.`);
     throw new Error(detail || `The API returned ${res.status}.`);
   }
 
   const data = await res.json();
-  const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+  const { text, cut } = p.read(data);
   if (!text) throw new Error("The API replied with nothing. Try marking again.");
-  if (data.stop_reason === "max_tokens"){
+  if (cut){
     const e = new Error("The reply was cut off before it finished. Try a shorter answer or fewer attachments.");
     e.raw = text; throw e;
   }
@@ -524,6 +707,20 @@ function showBusy(){
   out.innerHTML = `<div class="load"><span class="dot"></span>Reading the response against the criteria…</div>`;
 }
 
+/* How many attachments the model could not see. Kept so the finished mark can
+   still say so: a caveat that vanishes when the result arrives is no caveat,
+   and the reader would take a text-only mark for a mark of the picture. */
+let lastDropped = 0;
+
+/* A note beside the provider picker, so the limitation is visible before a
+   mark is attempted rather than only when one fails. */
+function paintImageNote(){
+  const el = $("#imgnote");
+  if (!el) return;
+  el.textContent = P().images ? ""
+    : "reads text only — image questions are marked from their text, or refused";
+}
+
 function showError(title, detail, raw){
   $("#copy").classList.add("hidden");
   out.innerHTML =
@@ -550,6 +747,7 @@ function showResult(r){
       <span class="of">/ ${r.max != null ? esc(r.max) : "?"}</span>
       <span class="who">${esc(r.subject)}${fromSorter ? `<br>${esc(fromSorter.year)} ${esc(fromSorter.source === "Trial" ? fromSorter.school : "HSC")} · Q${esc(fromSorter.questionNumber)}` : ""}</span>
     </div>
+    ${lastDropped ? `<p class="caveat">${esc(P().label)} cannot read images, so ${lastDropped} attachment${lastDropped === 1 ? " was" : "s were"} left out — this mark is from the question text and your answer alone. Switch to Anthropic to have the attachment read.</p>` : ""}
     ${r.inferred ? `<p class="caveat">Marked without official guidelines — the breakdown below was inferred from standard HSC conventions. Send a question from Browse and its real NESA guidelines come with it.</p>` : `<div style="height:14px"></div>`}
     ${rows ? `<p class="sec">Mark by mark</p><ul class="crit">${rows}</ul>` : ""}
     ${r.feedback ? `<p class="sec">Marker's comment</p><div class="comment">${esc(r.feedback)}</div>` : ""}
@@ -703,6 +901,11 @@ $("#go").addEventListener("click", async () => {
 
   try {
     const content = await buildContent();
+    const can = markableWith(content);
+    if (!can.ok){
+      throw new Error(`${P().label} cannot read images, and ${can.why}. Type it in as text, or switch to Anthropic, which reads attachments.`);
+    }
+    lastDropped = can.dropped;
     const raw = await callApi(getKey(), $("#model").value, content, controller.signal);
     showResult(parseResult(raw));
   } catch (err){

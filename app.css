@@ -278,6 +278,8 @@ body.pt-mode #printview{display:block;max-width:840px;margin:0 auto;padding:18px
 .keystrip p:empty{display:none}
 .provrow{margin-bottom:12px;gap:10px}
 .provrow select{width:auto;min-width:190px;flex:0 0 auto}
+#testout{margin:0 0 10px;color:var(--ink-3);font-size:12.5px;max-width:74ch}
+#testout:empty{display:none}
 .provrow .note{color:var(--ink-3);font-size:12.5px;flex:1 1 auto}
 .keystrip select{font:inherit;padding:6px 8px;border:1px solid var(--rule);background:var(--card);color:var(--ink)}
 

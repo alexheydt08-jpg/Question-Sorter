@@ -20,22 +20,22 @@ const UNSET = "Not set";
    must not throw away the other key, and Anthropic keeps its original name so
    nobody has to paste a saved key again.
 
-   `images: false` is not a detail. DeepSeek's chat models read text only,
-   while this marker's whole point is showing the model the actual question
-   crop, so a question that exists only as a picture cannot be marked by it —
-   see markableWith() below.
+   Whether pictures can be sent is a property of the MODEL, not the provider:
+   DeepSeek's chat and reasoner models read text only, while deepseek-flash
+   takes images. Each model entry carries its own flag, and the marker asks the
+   selected model rather than the provider — see visionNow() below.
    -------------------------------------------------------------------------- */
 const PROVIDERS = {
   anthropic: {
     label: "Anthropic (Claude)",
     keyStorage: "hsc-marker-key",
     hint: "sk-ant-…",
-    images: true,
     console: "https://console.anthropic.com/settings/keys",
+    docs: true,                       // reads PDFs as well as images
     models: [
-      ["claude-opus-5", "Opus 5"],
-      ["claude-sonnet-5", "Sonnet 5"],
-      ["claude-haiku-4-5-20251001", "Haiku 4.5"]
+      ["claude-opus-5", "Opus 5", true],
+      ["claude-sonnet-5", "Sonnet 5", true],
+      ["claude-haiku-4-5-20251001", "Haiku 4.5", true]
     ],
     url: "https://api.anthropic.com/v1/messages",
     headers: key => ({
@@ -57,11 +57,12 @@ const PROVIDERS = {
     label: "DeepSeek",
     keyStorage: "hsc-marker-key-deepseek",
     hint: "sk-…",
-    images: false,
     console: "https://platform.deepseek.com/api_keys",
+    docs: false,                      // images yes, PDFs no
     models: [
-      ["deepseek-chat", "DeepSeek Chat"],
-      ["deepseek-reasoner", "DeepSeek Reasoner"]
+      ["deepseek-flash", "DeepSeek Flash — reads images", true],
+      ["deepseek-chat", "DeepSeek Chat — text only", false],
+      ["deepseek-reasoner", "DeepSeek Reasoner — text only", false]
     ],
     url: "https://api.deepseek.com/chat/completions",
     headers: key => ({
@@ -73,6 +74,21 @@ const PROVIDERS = {
       messages: [{ role: "system", content: system },
                  { role: "user", content }]
     }),
+    /* DeepSeek's vision models take OpenAI-shaped blocks: an image is an
+       image_url holding a data URL, not Anthropic's {source:{...}}. PDFs have
+       no equivalent — JPEG, PNG, GIF and WebP only — so a PDF is dropped and
+       counted rather than sent in a shape the API would reject. */
+    convert: blocks => {
+      const out = []; let dropped = 0;
+      for (const b of blocks){
+        if (b.type === "text") out.push({ type: "text", text: b.text });
+        else if (b.type === "image" && b.source?.data)
+          out.push({ type: "image_url",
+                     image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` } });
+        else dropped++;
+      }
+      return { content: out, dropped };
+    },
     read: data => {
       const c = (data.choices || [])[0] || {};
       return { text: (c.message?.content || "").trim(),
@@ -89,6 +105,15 @@ const readProvider = () => {
 };
 let provider = readProvider();
 const P = () => PROVIDERS[provider];
+
+/* Can the model currently selected see pictures? Read from the model list, so
+   picking deepseek-flash turns attachments back on without touching anything
+   else. Falls back to the provider's first model before the UI has painted. */
+function visionNow(){
+  const want = (typeof document !== "undefined" && $("#model")?.value) || "";
+  const row = P().models.find(m => m[0] === want) || P().models[0];
+  return !!row[2];
+}
 
 /* Modules as named in the NESA Stage 6 syllabuses. Adding a subject means
    adding an entry here and a button to the subject group in the header. */
@@ -237,6 +262,7 @@ function paintKey(){
   paintModels();
   $("#keytest").textContent = "Test connection";
   $("#keytest").disabled = false;
+  $("#testout").textContent = "";
 }
 
 /* The model list belongs to the provider; keep whatever was selected if that
@@ -244,7 +270,7 @@ function paintKey(){
 function paintModels(){
   const sel = $("#model"), want = sel.value;
   sel.innerHTML = "";
-  for (const [value, label] of P().models){
+  for (const [value, label] of P().models){   // third field is the vision flag
     const o = document.createElement("option");
     o.value = value; o.textContent = label;
     sel.appendChild(o);
@@ -257,25 +283,25 @@ function paintModels(){
    "blocked" from "bad key" from "no balance". */
 $("#keytest").onclick = async () => {
   const p = P(), key = getKey(), btn = $("#keytest");
-  if (!key){ $("#keynote").textContent = "Enter a key first, then test it."; return; }
+  if (!key){ $("#testout").textContent = "Enter a key first, then test it."; return; }
   btn.disabled = true; btn.textContent = "Testing…";
   let res;
   try {
     res = await fetch(p.url, {
       method: "POST",
       headers: p.headers(key),
-      body: JSON.stringify(p.body(p.models[0][0], "Reply with OK.", p.images
-        ? [{ type: "text", text: "Reply with OK." }] : "Reply with OK."))
+      body: JSON.stringify(p.body($("#model").value || p.models[0][0], "Reply with OK.",
+        p.convert ? "Reply with OK." : [{ type: "text", text: "Reply with OK." }]))
     });
   } catch {
-    $("#keynote").textContent =
+    $("#testout").textContent =
       `Could not reach ${p.label}. Either you are offline, or your browser blocked the request because ${new URL(p.url).host} does not allow calls from a web page — in which case this provider cannot be used from this site.`;
     btn.disabled = false; btn.textContent = "Test connection";
     return;
   }
   let detail = "";
   try { detail = (await res.json())?.error?.message || ""; } catch {}
-  $("#keynote").textContent =
+  $("#testout").textContent =
       res.ok              ? `Connected. ${p.label} accepted the key and is ready to mark.`
     : res.status === 401  ? "That key was rejected. Check it is current and has not been revoked."
     : res.status === 402  ? `The key works, but this ${p.label} account has no balance. Top it up before marking.`
@@ -284,6 +310,8 @@ $("#keytest").onclick = async () => {
     : `${p.label} answered ${res.status}. ${detail}`.trim();
   btn.disabled = false; btn.textContent = "Test connection";
 };
+
+$("#model").addEventListener("change", paintImageNote);
 
 $("#provider").onchange = () => {
   provider = $("#provider").value;
@@ -571,8 +599,13 @@ function flattenForText(content){
    the text's length reads those placeholders as content and cheerfully marks a
    question the model never saw. */
 function markableWith(content){
+  if (visionNow()){
+    /* A vision model still cannot open a PDF on DeepSeek. Say how many were
+       left behind rather than marking as though it had read them. */
+    const d = P().convert ? P().convert(content).dropped : 0;
+    return { ok: true, dropped: d, pdf: d > 0 };
+  }
   const dropped = flattenForText(content).dropped;
-  if (P().images) return { ok: true, dropped: 0 };
   const has = id => !!$(id).value.trim();
   if (mode === "combined")
     return { ok: false, dropped, why: "the question and your answer are both inside the attached file" };
@@ -590,7 +623,8 @@ function markableWith(content){
 async function callApi(key, model, content, signal){
   const p = P();
   let payload = content;
-  if (!p.images) payload = flattenForText(content).text;
+  if (p.convert) payload = visionNow() ? p.convert(content).content
+                                       : flattenForText(content).text;
 
   let res;
   try {
@@ -710,15 +744,17 @@ function showBusy(){
 /* How many attachments the model could not see. Kept so the finished mark can
    still say so: a caveat that vanishes when the result arrives is no caveat,
    and the reader would take a text-only mark for a mark of the picture. */
-let lastDropped = 0;
+let lastDropped = 0, lastPdf = false;
 
 /* A note beside the provider picker, so the limitation is visible before a
    mark is attempted rather than only when one fails. */
 function paintImageNote(){
   const el = $("#imgnote");
   if (!el) return;
-  el.textContent = P().images ? ""
-    : "reads text only — image questions are marked from their text, or refused";
+  const vision = visionNow();
+  el.textContent = vision
+    ? (P().docs ? "" : "reads images, but not PDFs — attach a photo rather than a PDF")
+    : "this model reads text only — pick DeepSeek Flash to have images read";
 }
 
 function showError(title, detail, raw){
@@ -747,7 +783,9 @@ function showResult(r){
       <span class="of">/ ${r.max != null ? esc(r.max) : "?"}</span>
       <span class="who">${esc(r.subject)}${fromSorter ? `<br>${esc(fromSorter.year)} ${esc(fromSorter.source === "Trial" ? fromSorter.school : "HSC")} · Q${esc(fromSorter.questionNumber)}` : ""}</span>
     </div>
-    ${lastDropped ? `<p class="caveat">${esc(P().label)} cannot read images, so ${lastDropped} attachment${lastDropped === 1 ? " was" : "s were"} left out — this mark is from the question text and your answer alone. Switch to Anthropic to have the attachment read.</p>` : ""}
+    ${lastDropped ? `<p class="caveat">${lastPdf
+        ? `${esc(P().label)} cannot open PDFs, so ${lastDropped} attachment${lastDropped === 1 ? " was" : "s were"} left out. Attach the same page as a photo to have it read.`
+        : `The model you picked reads text only, so ${lastDropped} attachment${lastDropped === 1 ? " was" : "s were"} left out — this mark is from the question text and your answer alone. Choose DeepSeek Flash, or Anthropic, to have them read.`}</p>` : ""}
     ${r.inferred ? `<p class="caveat">Marked without official guidelines — the breakdown below was inferred from standard HSC conventions. Send a question from Browse and its real NESA guidelines come with it.</p>` : `<div style="height:14px"></div>`}
     ${rows ? `<p class="sec">Mark by mark</p><ul class="crit">${rows}</ul>` : ""}
     ${r.feedback ? `<p class="sec">Marker's comment</p><div class="comment">${esc(r.feedback)}</div>` : ""}
@@ -903,9 +941,9 @@ $("#go").addEventListener("click", async () => {
     const content = await buildContent();
     const can = markableWith(content);
     if (!can.ok){
-      throw new Error(`${P().label} cannot read images, and ${can.why}. Type it in as text, or switch to Anthropic, which reads attachments.`);
+      throw new Error(`The model you picked reads text only, and ${can.why}. Choose DeepSeek Flash, which reads images, or type the question in as text.`);
     }
-    lastDropped = can.dropped;
+    lastDropped = can.dropped; lastPdf = !!can.pdf;
     const raw = await callApi(getKey(), $("#model").value, content, controller.signal);
     showResult(parseResult(raw));
   } catch (err){

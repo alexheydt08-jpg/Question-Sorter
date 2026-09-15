@@ -121,8 +121,10 @@
       <option value="anthropic">Anthropic (Claude)</option>
       <option value="deepseek">DeepSeek</option>
     </select>
+    <button type="button" class="btn" id="keytest">Test connection</button>
     <span class="note" id="imgnote"></span>
   </div>
+  <p class="note" id="testout"></p>
 
   <!-- key: full row until a key is saved, then a single quiet line -->
   <div class="keystrip" id="keystrip">
@@ -131,7 +133,6 @@
       <input id="key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"
              aria-label="API key">
       <button type="button" class="btn primary" id="keysave">Save</button>
-      <button type="button" class="btn" id="keytest">Test connection</button>
       <button type="button" class="btn danger hidden" id="keyforget">Forget</button>
     </div>
     <p id="keynote">Marking needs your own Anthropic API key. It is kept in this browser only,
@@ -160,7 +161,7 @@
       <summary>Using DeepSeek instead — step by step</summary>
       <ol>
         <li>Go to <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com/api_keys</a>
-            and sign in or create an account.</li>
+            and sign in or create an account. This is the developer platform, not the DeepSeek chat app.</li>
         <li>Add credit under <b>Top up</b>. DeepSeek is billed per use like Anthropic and a key
             does nothing without a balance.</li>
         <li>Press <b>Create new API key</b>, name it <code>hsc-sorter</code>, and copy it —
@@ -168,14 +169,13 @@
         <li>Choose <b>DeepSeek</b> in the "Marked by" box above, paste the key, press <b>Save</b>,
             then press <b>Test connection</b>.</li>
       </ol>
-      <p class="note"><b>DeepSeek reads text, not pictures.</b> A question sent from Browse is
-         marked from its text, and the marker says so. A question you only have as a photo
-         cannot be marked by DeepSeek at all — type the question in, or switch back to Anthropic,
-         which reads the image itself. For diagram-heavy Physics questions Anthropic is the
-         better choice.</p>
-      <p class="note"><b>Test connection first.</b> This site has no server, so your browser
-         calls DeepSeek directly. If DeepSeek does not permit that, the test says so plainly and
-         the provider cannot be used here — nothing you can configure will change it.</p>
+      <p class="note"><b>Pick the right model.</b> <b>DeepSeek Flash</b> reads images, so a question
+         sent from Browse is marked from the actual crop. <b>Chat</b> and <b>Reasoner</b> read text
+         only — with those, an image-only question is refused rather than guessed at. The model
+         picker sits above the question box and the note beside "Marked by" always says which you
+         are on.</p>
+      <p class="note"><b>PDFs.</b> DeepSeek reads JPEG, PNG, GIF and WebP, but not PDF. Attach a
+         photo of the page instead, or use Anthropic, which reads PDFs directly.</p>
     </details>
   </div>
   <button type="button" class="keysaved hidden" id="keyedit">

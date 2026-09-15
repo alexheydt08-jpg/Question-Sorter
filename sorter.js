@@ -34,7 +34,10 @@ for (const r of TRIALS) {
 }
 const MODORDER = m => {
   if (m === UNSORTED) return 99;
-  const hit = m.match(/Module (\d)/);
+  /* Chemistry and Physics number modules, Economics numbers topics. Matching
+     only "Module" left all four Economics topics on the same fallback score,
+     so the tree came out 2, 4, 1, 3. */
+  const hit = m.match(/(?:Module|Topic) (\d)/);
   return hit ? parseInt(hit[1]) : 98;
 };
 

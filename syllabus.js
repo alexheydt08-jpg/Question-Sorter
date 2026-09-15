@@ -36,6 +36,41 @@ const SYLLABUS = {
       "Chemical Synthesis and Design",
     ],
   },
+  /* Economics runs four HSC topics rather than modules 5-8, each a quarter of
+     the course, and the order below is the syllabus's own (10.1 to 10.4). The
+     sub-topics are the "Students learn about" headings, which is the level a
+     past question can actually be filed at. */
+  Economics: {
+    "Topic 1: The Global Economy": [
+      "International Economic Integration",
+      "Trade, Financial Flows and Foreign Investment",
+      "Globalisation and Economic Development",
+    ],
+    "Topic 2: Australia's Place in the Global Economy": [
+      "Australia's Trade and Financial Flows",
+      "Australia's Balance of Payments",
+      "Exchange Rates",
+      "Free Trade and Protection",
+    ],
+    "Topic 3: Economic Issues": [
+      "Economic Growth",
+      "Unemployment",
+      "Inflation",
+      "External Stability",
+      "Distribution of Income and Wealth",
+      "Environmental Sustainability",
+    ],
+    "Topic 4: Economic Policies and Management": [
+      "Economic Objectives",
+      "Fiscal Policy",
+      "Monetary Policy",
+      "Microeconomic Policies",
+      "Labour Market Policies",
+      "Environmental Management",
+      "Limitations of Economic Policies",
+    ],
+  },
+
   Physics: {
     "Module 5: Advanced Mechanics": [
       "Projectile Motion",

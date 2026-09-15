@@ -19,11 +19,26 @@ const APP = {
   onView: [],
 };
 
+/* Chemistry and Physics are taught as modules 5-8; Economics runs four
+   numbered topics instead. The sidebar heading has to follow the subject or it
+   announces the wrong thing entirely. */
+const TREE_HEAD = {
+  Chemistry: "Modules 5–8 · Year 12",
+  Physics:   "Modules 5–8 · Year 12",
+  Economics: "Topics 1–4 · Year 12",
+};
+
+function paintTreeHead(){
+  const el = document.getElementById("treehead");
+  if (el) el.textContent = TREE_HEAD[APP.subject] || "Year 12";
+}
+
 function setSubject(s){
   if (!s || s === APP.subject) return;
   APP.subject = s;
   document.body.classList.toggle("phys", s === "Physics");
   drawSubjects();
+  paintTreeHead();
   APP.onSubject.forEach(fn => fn(s));
 }
 
@@ -35,12 +50,20 @@ function setView(v){
   window.scrollTo({ top: 0 });
 }
 
+/* Order is the order they are offered in, not the order they were added. A
+   subject with no questions yet is left out rather than shown as an empty tab:
+   the list is a promise that there is something behind each button. */
+const SUBJECTS = ["Chemistry", "Physics", "Economics"];
+
+const subjectCount = s => (window.QDATA || []).filter(r => r.subject === s).length
+                        + (window.TDATA || []).filter(r => r.subject === s).length;
+
 function drawSubjects(){
   const host = $("#subjects");
   host.textContent = "";
-  for (const s of ["Chemistry", "Physics"]){
-    const n = (window.QDATA || []).filter(r => r.subject === s).length
-            + (window.TDATA || []).filter(r => r.subject === s).length;
+  for (const s of SUBJECTS){
+    const n = subjectCount(s);
+    if (!n) continue;
     const b = document.createElement("button");
     b.type = "button";
     b.setAttribute("aria-pressed", String(s === APP.subject));
@@ -54,4 +77,5 @@ $$("#views button").forEach(b =>
   b.addEventListener("click", () => setView(b.dataset.view)));
 
 drawSubjects();
+paintTreeHead();
 document.body.classList.toggle("phys", APP.subject === "Physics");

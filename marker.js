@@ -138,6 +138,12 @@ const MODULES = {
     "Module 6: Acid/base Reactions",
     "Module 7: Organic Chemistry",
     "Module 8: Applying Chemical Ideas"
+  ],
+  Economics: [
+    "Topic 1: The Global Economy",
+    "Topic 2: Australia's Place in the Global Economy",
+    "Topic 3: Economic Issues",
+    "Topic 4: Economic Policies and Management"
   ]
 };
 

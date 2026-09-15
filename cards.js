@@ -70,7 +70,8 @@ const readPrefs = () => {
 };
 const writePrefs = p => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch {} };
 
-let PREFS = Object.assign({ newPerDay: 20, lastExport: 0, hideBackupNote: false }, readPrefs());
+let PREFS = Object.assign({ newPerDay: 20, lastExport: 0, hideBackupNote: false,
+                           scope: "subject" }, readPrefs());
 const savePrefs = () => { writePrefs(PREFS); };
 
 /* ---------- SM-2 ---------------------------------------------------------
@@ -176,6 +177,24 @@ async function loadCards(){
 /* tombstones stay in the store so deletions can propagate, but nothing that
    draws the collection should ever see them */
 const visibleCards = () => CARDS.filter(c => !c.deleted);
+
+/* The collection as the Bank should show it.
+
+   Browse, Practice test and the Marker all follow the subject chosen at the
+   top; the Bank did not, so a Chemistry session counted Physics and Economics
+   cards as due and mixed them into the queue. Scoping here means every count,
+   deck, streak and badge follows, because they all read through this.
+
+   "All subjects" stays available: revising everything at once before a block
+   of exams is a real way to use it, and the choice is remembered. */
+const scopeAll = () => PREFS.scope === "all";
+const deckCards = () => scopeAll() ? visibleCards()
+                                   : visibleCards().filter(c => c.subject === APP.subject);
+const otherSubjectCount = () => visibleCards().length - deckCards().length;
+
+/* Scoped to one subject the name is already known, so a deck is just its
+   module; across subjects it has to say which subject it belongs to. */
+const deckKey = c => (scopeAll() ? `${c.subject} · ` : "") + (c.deck.module || "No module");
 
 /* A local edit: stamp the clock and let the sync layer know. */
 async function putCard(c){
@@ -320,19 +339,19 @@ function todayKey(d = new Date()){ return d.toISOString().slice(0, 10); }
 
 function studiedToday(){
   const k = todayKey();
-  return visibleCards().reduce((n, c) =>
+  return deckCards().reduce((n, c) =>
     n + (c.history || []).filter(h => todayKey(new Date(h.ts)) === k).length, 0);
 }
 
 function newSeenToday(){
   const k = todayKey();
-  return visibleCards().filter(c => (c.history || []).some(h =>
+  return deckCards().filter(c => (c.history || []).some(h =>
     h.first && todayKey(new Date(h.ts)) === k)).length;
 }
 
 function queueFor(filter){
   const now = Date.now();
-  const pool = visibleCards().filter(filter || (() => true));
+  const pool = deckCards().filter(filter || (() => true));
   const due = pool.filter(c => c.srs.state !== "new" && c.srs.due <= now)
                   .sort((a, b) => a.srs.due - b.srs.due);
   const fresh = pool.filter(c => c.srs.state === "new")
@@ -342,7 +361,7 @@ function queueFor(filter){
 
 function streak(){
   const days = new Set();
-  visibleCards().forEach(c => (c.history || []).forEach(h => days.add(todayKey(new Date(h.ts)))));
+  deckCards().forEach(c => (c.history || []).forEach(h => days.add(todayKey(new Date(h.ts)))));
   let n = 0;
   const d = new Date();
   /* today not yet studied should not break a run that is still alive */
@@ -396,20 +415,28 @@ function drawBackupNote(){
 /* ---------- study -------------------------------------------------------- */
 function drawStudy(host){
   const due = queueFor().length;
-  const total = visibleCards().length;
+  const total = deckCards().length;
   const newLeft = Math.max(0, PREFS.newPerDay - newSeenToday());
 
   if (!studyState){
     const byDeck = {};
-    visibleCards().forEach(c => {
-      const k = `${c.subject} · ${c.deck.module || "No module"}`;
+    deckCards().forEach(c => {
+      const k = deckKey(c);
       byDeck[k] = byDeck[k] || { due: 0, total: 0 };
       byDeck[k].total++;
       if (queueFor(x => x.id === c.id).length) byDeck[k].due++;
     });
     const decks = Object.entries(byDeck).sort((a, b) => b[1].due - a[1].due);
 
+    const others = otherSubjectCount();
     host.innerHTML = `
+      <div class="scope">
+        <span class="lbl">Studying</span>
+        <button class="btn ${scopeAll() ? "" : "on"}" data-scope="subject">${esc(APP.subject)}</button>
+        <button class="btn ${scopeAll() ? "on" : ""}" data-scope="all">All subjects</button>
+        ${!scopeAll() && others
+            ? `<span class="note">${others} card${others === 1 ? "" : "s"} in other subjects</span>` : ""}
+      </div>
       <div class="dash">
         <div class="stat"><b>${due}</b><span>due now</span></div>
         <div class="stat"><b>${newLeft}</b><span>new left today</span></div>
@@ -418,9 +445,10 @@ function drawStudy(host){
         <div class="stat"><b>${total}</b><span>cards</span></div>
       </div>
       ${total === 0
-        ? `<p class="empty">No cards yet. Mark an answer and save it, or add one under <b>Add card</b>.</p>`
+        ? `<p class="empty">No ${esc(scopeAll() ? "" : APP.subject + " ")}cards yet. Mark an answer and save it, or add one under <b>Add card</b>.${
+              !scopeAll() && others ? ` You have ${others} card${others === 1 ? "" : "s"} in other subjects — switch subject up top, or study all subjects.` : ""}</p>`
         : due === 0
-          ? `<p class="empty">Nothing due. ${visibleCards().filter(c=>c.srs.state==="new").length
+          ? `<p class="empty">Nothing due. ${deckCards().filter(c=>c.srs.state==="new").length
               ? "You have hit today's new-card limit — raise it below or come back tomorrow."
               : "Everything is scheduled ahead; come back later."}</p>`
           : `<button class="go" id="startstudy">Study ${due} card${due===1?"":"s"}</button>`}
@@ -442,11 +470,14 @@ function drawStudy(host){
         </label>
       </div>`;
 
+    host.querySelectorAll("[data-scope]").forEach(b => b.onclick = () => {
+      PREFS.scope = b.dataset.scope; savePrefs(); drawBank();
+    });
     const start = $("#startstudy");
     if (start) start.onclick = () => beginStudy(null, "All due");
     host.querySelectorAll(".deck").forEach(b => b.onclick = () => {
       const k = b.dataset.deck;
-      beginStudy(c => `${c.subject} · ${c.deck.module || "No module"}` === k, k);
+      beginStudy(c => deckKey(c) === k, k);
     });
     host.querySelectorAll("[data-cs]").forEach(b => b.onclick = () => {
       const kind = b.dataset.cs;
@@ -467,7 +498,7 @@ function drawStudy(host){
 /* `ignoreSchedule` powers custom study: take the cards regardless of due date */
 function beginStudy(filter, label, ignoreSchedule){
   const pool = ignoreSchedule
-    ? shuffleCards(visibleCards().filter(filter || (() => true)))
+    ? shuffleCards(deckCards().filter(filter || (() => true)))
     : queueFor(filter);
   if (!pool.length){ return; }
   studyState = { queue: pool, i: 0, revealed: false, label };
@@ -576,7 +607,7 @@ document.addEventListener("keydown", e => {
 
 function reviewsByDay(){
   const out = {};
-  visibleCards().forEach(c => (c.history || []).forEach(h => {
+  deckCards().forEach(c => (c.history || []).forEach(h => {
     const k = todayKey(new Date(h.ts));
     out[k] = (out[k] || 0) + 1;
   }));
@@ -584,7 +615,7 @@ function reviewsByDay(){
 }
 
 function statsSummary(){
-  const cards = visibleCards();
+  const cards = deckCards();
   const all = cards.flatMap(c => (c.history || []).map(h => ({ ...h, state: c.srs.state })));
   const today = todayKey();
   const todays = all.filter(h => todayKey(new Date(h.ts)) === today);
@@ -690,10 +721,16 @@ function drawStats(host){
 }
 
 /* ---------- card browser ------------------------------------------------- */
-const listState = { q: "", subject: "", module: "", starred: false, sort: "created" };
+/* `subject: null` means "not chosen yet", so the list opens on whatever subject
+   is being studied instead of every card at once, while an explicit "" from
+   the picker still means every subject. */
+const listState = { q: "", subject: null, module: "", starred: false, sort: "created" };
+const listSubject = () =>
+  listState.subject === null ? (scopeAll() ? "" : APP.subject) : listState.subject;
 
 function cardMatches(c){
-  if (listState.subject && c.subject !== listState.subject) return false;
+  const want = listSubject();
+  if (want && c.subject !== want) return false;
   if (listState.module && c.deck.module !== listState.module) return false;
   if (listState.starred && !c.starred) return false;
   const q = listState.q.trim().toLowerCase();
@@ -714,7 +751,7 @@ function dueLabel(c){
 function drawCardList(host){
   const shown = visibleCards();
   const subs = [...new Set(shown.map(c => c.subject))].sort();
-  const mods = [...new Set(shown.filter(c => !listState.subject || c.subject === listState.subject)
+  const mods = [...new Set(shown.filter(c => !listSubject() || c.subject === listSubject())
                                .map(c => c.deck.module).filter(Boolean))].sort();
   const rows = shown.filter(cardMatches);
   rows.sort((a, b) => listState.sort === "due" ? a.srs.due - b.srs.due : b.created - a.created);
@@ -723,7 +760,7 @@ function drawCardList(host){
     <div class="cardbar">
       <input type="search" id="csearch" placeholder="Search questions, answers, notes, tags…" value="${esc(listState.q)}">
       <select id="csub"><option value="">Any subject</option>${subs.map(s =>
-        `<option ${s===listState.subject?"selected":""}>${esc(s)}</option>`).join("")}</select>
+        `<option ${s===listSubject()?"selected":""}>${esc(s)}</option>`).join("")}</select>
       <select id="cmod"><option value="">Any module</option>${mods.map(m =>
         `<option ${m===listState.module?"selected":""}>${esc(m)}</option>`).join("")}</select>
       <button class="btn ${listState.starred?"on":""}" id="cstar">★ Starred</button>
@@ -782,7 +819,7 @@ async function drawEditor(host){
     <div class="editor">
       <div class="erow">
         <label>Subject
-          <select id="esub">${["Chemistry","Physics"].map(s =>
+          <select id="esub">${SUBJECTS.map(s =>
             `<option ${s===c.subject?"selected":""}>${esc(s)}</option>`).join("")}</select>
         </label>
         <label>Module
@@ -1228,8 +1265,11 @@ async function initCards(){
   drawBank();
 }
 
-/* the reviewer counts and the due badge follow the subject, so redraw on both */
+/* The counts, decks and due badge are all scoped to the chosen subject, so the
+   Bank has to be redrawn when the subject changes as well as when it is
+   opened - otherwise switching subject leaves the previous one's numbers up. */
 APP.onView.push(v => { if (v === "bank") drawBank(); else releaseUrls(); });
+APP.onSubject.push(() => { if (!studyState) drawBank(); });
 
 /* the surface sync.js works through, so the two files stay decoupled */
 window.cardsAPI = {

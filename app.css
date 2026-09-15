@@ -276,6 +276,10 @@ body.pt-mode #printview{display:block;max-width:840px;margin:0 auto;padding:18px
 .keystrip input{flex:1;min-width:210px;width:auto}
 .keystrip p{margin:8px 0 0;color:var(--ink-3);font-size:12.5px;max-width:74ch}
 .keystrip p:empty{display:none}
+.scope{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.scope .lbl{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.scope .btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.scope .note{color:var(--ink-3);font-size:12.5px}
 .provrow{margin-bottom:12px;gap:10px}
 .provrow select{width:auto;min-width:190px;flex:0 0 auto}
 #testout{margin:0 0 10px;color:var(--ink-3);font-size:12.5px;max-width:74ch}

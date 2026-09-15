@@ -12,3 +12,7 @@ dist/
 __MACOSX/
 Thumbs.db
 *.log
+
+# Python bytecode from the offline tools
+__pycache__/
+*.pyc

@@ -177,24 +177,22 @@ const questionCardId = recId => "q-" + recId;
 function cardFromQuestion(rec){
   const c = blankCard(rec.subject);
   c.id = questionCardId(rec.id);
-  const origin = rec.source === "Trial" ? `${rec.school} trial` : "HSC";
-  /* The crop is the question. rec.questionText is the PDF's own text layer,
-     which comes out of a scanned diagram or a multiple choice as scrambled
-     fragments — so the front carries a line saying which question this is, and
-     then the images. */
+  /* The crop is the question — nothing is written on the front. The paper
+     already prints its own question number, and rec.questionText is the PDF's
+     text layer, which comes out of a diagram or a multiple choice as scrambled
+     fragments. Which question this is lives in c.tags and the id instead, so
+     the Bank can still find it without putting words on the card. */
   c.front = {
-    text: `${rec.year} ${origin} ${rec.subject} Q${rec.questionNumber}`,
+    text: "",
     images: (rec.questionImages || []).map(p => ({ kind: "repo", src: p })),
   };
-  /* "Correct answer", matching what Browse already prints under a multiple
-     choice question — the marker used to say "option", and one of them had to
-     win now that both build the card here. */
   c.back = { text: "", images: (rec.mgImages || []).map(p => ({ kind: "repo", src: p })) };
-  if (rec.section === "I" && rec.answer) c.back.text = `Correct answer: ${rec.answer}`;
-  /* rec.mgText is the same scraped text for the guidelines, and every record
-     that has it has the guideline crop as well, so it would only repeat the
-     image badly. The answer letter stays: it is a fact, not scraped text, and
-     for a multiple choice with no guidelines it is the whole back. */
+  /* Where there is a guidelines crop, the crop is the answer. Where the paper
+     published none, a multiple choice would otherwise have a blank back, so
+     the letter is written out — that is the one case where a card carries any
+     text of its own. */
+  if (!c.back.images.length && rec.section === "I" && rec.answer)
+    c.back.text = `Correct answer: ${rec.answer}`;   // the wording Browse uses
 
   c.tags = [rec.source === "Trial" ? "Trial" : "HSC",
             rec.year && String(rec.year), rec.school].filter(Boolean);
@@ -860,7 +858,7 @@ function drawCardList(host){
       <div class="crow" data-id="${esc(c.id)}">
         <span class="cstar ${c.starred?"on":""}" data-star="${esc(c.id)}">${c.starred?"★":"☆"}</span>
         <span class="cfront">
-          <b>${esc((c.front.text || "(image only)").slice(0, 110))}</b>
+          <b>${esc((c.front.text || (c.tags || []).join(" · ") || "(image only)").slice(0, 110))}</b>
           <i>${esc(c.deck.module || "No module")}${c.deck.iqs?.length ? " · " + esc(c.deck.iqs.length + " IQ") : ""}${c.front.images.length||c.back.images.length ? " · 🖼" : ""}</i>
         </span>
         <span class="cdue ${c.srs.state==="new"?"new":(c.srs.due<=Date.now()?"on":"")}">${dueLabel(c)}</span>

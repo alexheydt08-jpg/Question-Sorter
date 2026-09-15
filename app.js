@@ -17,6 +17,7 @@ const APP = {
   view: "browse",
   onSubject: [],   // listeners, registered by each half
   onView: [],
+  onCards: [],     // listeners, fired when the flashcard collection changes
 };
 
 /* Chemistry and Physics are taught as modules 5-8; Economics runs four

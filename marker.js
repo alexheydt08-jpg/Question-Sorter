@@ -809,9 +809,10 @@ function showResult(r){
    to hand over the question, the correct answer and where they belong.
    ========================================================================== */
 
+/* A question that came from Browse is described by cards.js, so Browse's own
+   "Add card" and this one cannot drift apart; what follows is for the files
+   the student attached themselves. */
 function currentQuestionText(){
-  if (fromSorter)
-    return `${fromSorter.year} ${fromSorter.source === "Trial" ? fromSorter.school + " trial" : "HSC"} ${fromSorter.subject} Q${fromSorter.questionNumber} — ${(fromSorter.questionText||"").slice(0,150)}`.trim();
   if (mode === "combined")
     return $("#cnote").value.trim() || (files.combined[0]?.name ? `From ${files.combined[0].name}` : "Attached file");
   if (mode === "paper"){
@@ -826,14 +827,10 @@ function currentQuestionText(){
    marker's account of what the remaining marks needed is the closest thing to
    a model answer, and the card says so. */
 function backForCard(r){
-  const out = { text: "", images: [], note: "" };
+  const out = fromSorter && window.cardsAPI
+    ? { ...cardFromQuestion(fromSorter).back, note: "" }
+    : { text: "", images: [], note: "" };
 
-  if (fromSorter){
-    if (fromSorter.section === "I" && fromSorter.answer)
-      out.text = `Correct option: ${fromSorter.answer}`;
-    if (fromSorter.mgText) out.text = (out.text ? out.text + "\n\n" : "") + fromSorter.mgText;
-    for (const p of (fromSorter.mgImages || [])) out.images.push({ kind: "repo", src: p });
-  }
   const typed = $("#g").value.trim();
   if (typed) out.text = (out.text ? out.text + "\n\n" : "") + typed;
 
@@ -851,19 +848,13 @@ function backForCard(r){
 }
 
 function frontForCard(){
-  const front = { text: currentQuestionText(), images: [] };
-  for (const p of (fromSorter?.questionImages || [])) front.images.push({ kind: "repo", src: p });
-  return front;
+  if (fromSorter && window.cardsAPI) return cardFromQuestion(fromSorter).front;
+  return { text: currentQuestionText(), images: [] };
 }
 
 function cardTags(){
-  const t = [];
-  if (fromSorter){
-    t.push(fromSorter.source === "Trial" ? "Trial" : "HSC");
-    if (fromSorter.year) t.push(String(fromSorter.year));
-    if (fromSorter.school) t.push(fromSorter.school);
-  }
-  return t;
+  if (fromSorter && window.cardsAPI) return cardFromQuestion(fromSorter).tags;
+  return [];
 }
 
 /* images the user attached rather than pulled from Browse have to be copied
@@ -885,6 +876,9 @@ async function saveBlock(r){
 
   window.renderSavePanel(host, {
     subject: r?.subject || APP.subject,
+    /* the id Browse would have used, so marking a question you already added
+       updates that card rather than making a second one */
+    id: fromSorter ? window.cardsAPI?.questionCardId(fromSorter.id) : null,
     front, back,
     notes: r?.feedback || "",
     tags: cardTags(),

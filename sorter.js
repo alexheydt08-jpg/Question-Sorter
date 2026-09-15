@@ -236,10 +236,78 @@ function card(r){
     <div class="qimgs">${qimgs}</div>
     <div class="qfoot">
       ${(r.mgImages || []).length || r.answer ? `<button class="reveal" aria-expanded="false">Show marking guidelines &amp; sample answer</button>` : `<span class="reveal none">No solutions with this paper</span>`}
+      <button class="addcard" data-add="${esc(r.id)}" title="Turn this question into a flashcard">＋ Add card</button>
       <button class="markit" title="Send this question and its official guidelines to the marker">✎ Mark my answer</button>
     </div>
     <div class="mg"><div class="mghdr">${isTrial ? "Marking guidelines from the school's solutions" : "Official NESA marking guidelines"}</div>${mg || "<p class=\"note\" style=\"margin:0\">No solutions were published with this paper.</p>"}${parts}</div>
   </article>`;
+}
+
+/* ---------- turning a question into a flashcard --------------------------- */
+/* Painting is deliberately not done in card(): card() first runs from
+   renderAll() at the bottom of this file, before cards.js has been parsed, so
+   the markup goes out neutral and the state is brushed on afterwards. */
+function paintAdd(btn){
+  const api = window.cardsAPI;
+  if (!api) return;
+  const on = api.hasQuestionCard(btn.dataset.add);
+  btn.classList.toggle("added", on);
+  btn.disabled = on;
+  btn.textContent = on ? "Added ✓" : "＋ Add card";
+  btn.title = on ? "This question is already one of your flashcards"
+                 : "Turn this question into a flashcard";
+}
+
+function paintAddAll(){
+  $("#results").querySelectorAll("button.addcard").forEach(paintAdd);
+}
+
+/* Nearly half the questions — almost every trial paper — came without
+   solutions of any kind, so there is nothing to put on the back. */
+const hasSolutions = r => !!((r.mgImages || []).length || r.answer || r.mgText);
+
+async function addToBank(rec, btn, ownBack){
+  const api = window.cardsAPI;
+  if (!api) return;
+  btn.disabled = true;
+  try { await api.addQuestionCard(rec, ownBack); }
+  finally { paintAdd(btn); }
+}
+
+/* Built the first time it is opened — 3,110 solution-less questions must not
+   each carry a textarea nobody asked for. Shown the way the .mg drawer is:
+   a class on the card, the panel itself always in place once it exists. */
+function openOwnBack(c, rec, btn){
+  let box = c.querySelector(".addback");
+  if (!box){
+    box = document.createElement("div");
+    box.className = "addback";
+    box.innerHTML = `<p class="note">This paper came without solutions, so the back of the card is yours to write.</p>
+      <textarea rows="5" placeholder="What should be on the back of this card?"></textarea>
+      <div class="arow"><button class="addgo" disabled>Add flashcard</button><button class="cancel">Cancel</button></div>`;
+    c.querySelector(".qfoot").insertAdjacentElement("afterend", box);
+
+    const ta = box.querySelector("textarea");
+    const go = box.querySelector(".addgo");
+    const close = () => { c.classList.remove("writing"); btn.disabled = false; };
+
+    /* a blank back is worse than no card at all */
+    ta.addEventListener("input", () => { go.disabled = !ta.value.trim(); });
+    ta.addEventListener("keydown", e => {
+      if (e.key === "Escape"){ e.stopPropagation(); close(); }
+      else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && ta.value.trim()) go.click();
+    });
+    box.querySelector(".cancel").onclick = close;
+    go.onclick = async () => {
+      const text = ta.value.trim();
+      if (!text) return;
+      c.classList.remove("writing");
+      await addToBank(rec, btn, text);
+    };
+  }
+  c.classList.add("writing");
+  btn.disabled = true;
+  box.querySelector("textarea").focus();
 }
 
 let shown = 0, matched = [];
@@ -285,6 +353,17 @@ function bindCards(){
       btn.textContent = open ? "Hide marking guidelines & sample answer"
                              : "Show marking guidelines & sample answer";
     };
+
+    const add = c.querySelector("button.addcard");
+    if (add){
+      paintAdd(add);
+      add.onclick = () => {
+        const rec = DATA.find(r => r.id === c.dataset.id);
+        if (!rec || !window.cardsAPI) return;
+        if (hasSolutions(rec)) addToBank(rec, add);
+        else openOwnBack(c, rec, add);
+      };
+    }
 
     c.querySelector(".markit").onclick = () => {
       const rec = DATA.find(r => r.id === c.dataset.id);
@@ -593,6 +672,9 @@ APP.onSubject.push(() => {
   renderAll();
   ptRenderTree(); ptUpdateMeta();
 });
+
+/* deleting a card in the Bank, or a sync pull, has to show up on the buttons */
+APP.onCards.push(paintAddAll);
 
 APP.onView.push(v => {
   if (v === "ptest"){

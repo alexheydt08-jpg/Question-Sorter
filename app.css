@@ -168,6 +168,27 @@ nav.tree{width:310px;flex:0 0 310px}
 .qfoot .markit{appearance:none;font:500 14px var(--sans);cursor:pointer;
   border:1px solid var(--pen);color:#fff;background:var(--pen);padding:9px 14px}
 .qfoot .markit:hover{background:#A62A20}
+.qfoot .addcard{appearance:none;font:500 14px var(--sans);cursor:pointer;
+  border:1px solid var(--accent);color:var(--accent);background:transparent;padding:9px 14px}
+.qfoot .addcard:hover{background:var(--accent-soft)}
+.qfoot .addcard.added{border-color:var(--won);color:var(--won);background:var(--won-wash);cursor:default}
+.qfoot .addcard:disabled{cursor:default}
+.qfoot .addcard:disabled:not(.added){opacity:.55}
+
+/* writing your own back, for the papers that came without solutions */
+.addback{display:none;margin:0 16px 16px;border:1px solid var(--rule);background:var(--sunk);padding:12px 14px}
+.qcard.writing .addback{display:block}
+.addback .note{margin:0 0 9px}
+.addback textarea{display:block;width:100%;box-sizing:border-box;resize:vertical;
+  font:14px/1.6 var(--sans);color:var(--ink);border:1px solid var(--rule-2);background:#fff;padding:9px 11px}
+.addback textarea:focus{outline:none;border-color:var(--accent)}
+.addback .arow{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.addback .addgo{appearance:none;font:500 14px var(--sans);cursor:pointer;
+  border:1px solid var(--accent);color:#fff;background:var(--accent);padding:8px 14px}
+.addback .addgo:disabled{opacity:.45;cursor:default}
+.addback .cancel{appearance:none;font:500 14px var(--sans);cursor:pointer;
+  border:1px solid var(--rule-2);color:var(--ink-3);background:transparent;padding:8px 14px}
+.addback .cancel:hover{border-color:var(--ink-3);color:var(--ink)}
 .mg{display:none;margin:0 16px 16px;border:1px solid var(--rule);background:var(--sunk);padding:12px 14px}
 .qcard.open .mg{display:block}
 .qcard.open .reveal{border-style:solid}

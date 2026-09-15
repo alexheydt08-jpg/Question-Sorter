@@ -162,6 +162,84 @@ function blankCard(subject){
   };
 }
 
+/* ---------- a card built from a Browse question -------------------------- *
+   Browse and the marker turn the same record into the same card, so the shape
+   lives here rather than half in each of them.
+
+   The id is derived from the question's own id rather than being random, and
+   that one choice earns four things: Browse can ask "is this already a card?"
+   without touching the database, the same question added on two devices merges
+   to one card instead of two, deleting and re-adding revives the original row
+   rather than stranding its tombstone, and the marker can save into the card
+   Browse made. */
+const questionCardId = recId => "q-" + recId;
+
+function cardFromQuestion(rec){
+  const c = blankCard(rec.subject);
+  c.id = questionCardId(rec.id);
+  const origin = rec.source === "Trial" ? `${rec.school} trial` : "HSC";
+  c.front = {
+    text: `${rec.year} ${origin} ${rec.subject} Q${rec.questionNumber} — ${(rec.questionText || "").slice(0, 150)}`.trim(),
+    images: (rec.questionImages || []).map(p => ({ kind: "repo", src: p })),
+  };
+  /* "Correct answer", matching what Browse already prints under a multiple
+     choice question — the marker used to say "option", and one of them had to
+     win now that both build the card here. */
+  c.back = { text: "", images: (rec.mgImages || []).map(p => ({ kind: "repo", src: p })) };
+  if (rec.section === "I" && rec.answer) c.back.text = `Correct answer: ${rec.answer}`;
+  if (rec.mgText) c.back.text = (c.back.text ? c.back.text + "\n\n" : "") + rec.mgText;
+
+  c.tags = [rec.source === "Trial" ? "Trial" : "HSC",
+            rec.year && String(rec.year), rec.school].filter(Boolean);
+  const mod = rec.tags?.[0]?.module || "";
+  c.deck.module = MODULE_LIST(c.subject).includes(mod) ? mod : "";
+  c.deck.iqs = (rec.tags || []).map(t => t.iq).filter(Boolean);
+  return c;
+}
+
+/* Already in the collection? A tombstone does not count: it is there so a
+   deletion reaches the other devices, not to stop the question being added
+   again. */
+function hasQuestionCard(recId){
+  const c = CARDS.find(x => x.id === questionCardId(recId));
+  return !!c && !c.deleted;
+}
+
+/* One click from Browse. `ownBack` is the text the student wrote for the papers
+   that came without solutions — about half of them.
+
+   Re-adding a question that was deleted revives the same row rather than making
+   a second one. The tombstone blanked both faces, so they are rebuilt, and the
+   fresh updatedAt is what carries the revival to the other devices. Its
+   schedule starts over: the old one was about a card that no longer exists. */
+async function addQuestionCard(rec, ownBack){
+  const fresh = cardFromQuestion(rec);
+  if (ownBack != null) fresh.back = { text: String(ownBack).trim(), images: [] };
+
+  const mine = CARDS.find(x => x.id === fresh.id);
+  if (mine && !mine.deleted) return mine;
+
+  let c = fresh;
+  if (mine){
+    c = mine;
+    delete c.deleted; delete c.deletedAt;
+    c.front = fresh.front; c.back = fresh.back;
+    c.tags = fresh.tags; c.deck = fresh.deck;
+    c.srs = newSrs();
+  }
+  await putCard(c);
+  drawBank();          // the Bank's badge counts this card now
+  return c;
+}
+
+/* Browse keeps an "Added ✓" on every question it has a card for, so it has to
+   hear about every way the collection can change - not just its own clicks.
+   Deliberately not called from drawBank(), which runs on every Bank tab switch
+   and would sweep Browse for nothing. */
+function fireCardsChanged(){
+  for (const fn of (APP.onCards || [])) { try { fn(); } catch {} }
+}
+
 const TOMBSTONE_TTL = 60 * DAY;
 
 async function loadCards(){
@@ -201,6 +279,7 @@ async function putCard(c){
   c.updatedAt = Date.now();
   await putCardRaw(c);
   try { window.onCardsChanged?.(); } catch {}
+  fireCardsChanged();
 }
 
 /* A write that is not a local edit — a merge from another device, or the
@@ -1044,6 +1123,7 @@ async function importCards(file){
   const r = await mergeIncoming(data.cards);
   await loadCards();
   drawBank();
+  fireCardsChanged();   // a restore writes through putCardRaw, which does not
   return { ...r, total: data.cards.length };
 }
 
@@ -1169,9 +1249,15 @@ async function storeBlobDirect(blob){
 }
 
 /* ---------- the save panel the marker shows after a mark ------------------ */
-/* payload: { subject, front:{text,images}, back:{text,images}, notes, tags, iqs, module } */
+/* payload: { subject, front:{text,images}, back:{text,images}, notes, tags, iqs, module, id } */
 function renderSavePanel(host, payload){
   const c = blankCard(payload.subject);
+  /* A question is one card wherever it is saved from. Given the id Browse
+     would use, marking a question you had already added updates that card
+     instead of making a second one — so the panel says so, because this
+     replaces a back the student may have written themselves. */
+  if (payload.id) c.id = payload.id;
+  const updating = payload.id ? hasQuestionCard(String(payload.id).replace(/^q-/, "")) : false;
   c.front = payload.front;
   c.back = payload.back;
   c.notes = payload.notes || "";
@@ -1182,8 +1268,10 @@ function renderSavePanel(host, payload){
   const mods = MODULE_LIST(c.subject);
   host.innerHTML = `
     <div class="savecard">
-      <p class="t">Add this to your flashcards</p>
-      <p class="d">${payload.backNote || "The question goes on the front, the correct answer on the back."}</p>
+      <p class="t">${updating ? "Update the flashcard for this question" : "Add this to your flashcards"}</p>
+      <p class="d">${updating
+        ? "You already have a card for this question. Saving replaces both its sides with what is here."
+        : (payload.backNote || "The question goes on the front, the correct answer on the back.")}</p>
       <div class="erow">
         <label>Module
           <select id="svmod"><option value="">— none —</option>${mods.map(m =>
@@ -1192,7 +1280,7 @@ function renderSavePanel(host, payload){
       </div>
       <div class="iqpick" id="sviq">${iqPickerHTML(c)}</div>
       <div class="ebtns">
-        <button class="btn primary" id="svsave">Add flashcard</button>
+        <button class="btn primary" id="svsave">${updating ? "Update flashcard" : "Add flashcard"}</button>
       </div>
     </div>`;
 
@@ -1203,7 +1291,7 @@ function renderSavePanel(host, payload){
   $("#svsave").onclick = async () => {
     await putCard(c);
     host.innerHTML = `<div class="savecard saved">
-      <p class="t">Added to your flashcards</p>
+      <p class="t">${updating ? "Flashcard updated" : "Added to your flashcards"}</p>
       <p class="d" style="margin:0">It is scheduled to come round under <b>Bank → Study</b>.</p></div>`;
     drawBank();
   };
@@ -1263,6 +1351,10 @@ async function initCards(){
     drawBank();
   };
   drawBank();
+  /* Browse painted its "Add card" buttons before this file had even been
+     parsed, let alone opened the database, so every one of them currently reads
+     "Add card". Now that the collection is loaded, tell it the truth. */
+  fireCardsChanged();
 }
 
 /* The counts, decks and due badge are all scoped to the chosen subject, so the
@@ -1276,8 +1368,14 @@ window.cardsAPI = {
   mergeIncoming,
   putCardRaw,
   allCards: () => CARDS,                 // tombstones included: deletions must travel
-  reload: async () => { await loadCards(); drawBank(); },
+  reload: async () => { await loadCards(); drawBank(); fireCardsChanged(); },
   redraw: () => drawBank(),
+  /* Browse's "Add card" works entirely through these, so it never reaches for
+     CARDS, putCard or drawBank directly — and their absence is also how it
+     detects that this file has not booted, or that storage is blocked. */
+  questionCardId,
+  hasQuestionCard,
+  addQuestionCard,
   hasBlob: async id => !!(await dbGet("blobs", id)),
   getBlob: async id => (await dbGet("blobs", id))?.blob || null,
   putBlob: (id, blob) => dbPut("blobs", { id, blob }),

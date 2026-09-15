@@ -18,6 +18,12 @@
    `setter` is the school or company that set the paper, or "NESA" for an HSC
    paper. Question numbers are the paper's own.
 
+   An answer is normally one option letter. A paper that accepts two options
+   for a question it judged flawed says so in its key — NESA writes "B and C",
+   a school may write "C or D" — and that is kept in the paper's own wording
+   rather than flattened to one letter. It reads correctly everywhere the
+   field is shown.
+
    Nothing is written unless every answer in the file passes: a wrong question
    number or an off-by-one run through a paper is far more expensive to find
    later than to reject here. Pass --overwrite to replace answers that are
@@ -49,8 +55,9 @@ for (const p of papers) {
 
   for (const [num, raw] of Object.entries(p.answers || {})) {
     const where = `${key} Q${num}`;
-    const letter = String(raw).trim().toUpperCase();
-    if (!/^[A-D]$/.test(letter)) { problems.push(`${where}: "${raw}" is not an option letter`); continue; }
+    const letter = String(raw).trim().toUpperCase()
+                      .replace(/\s+AND\s+/, " and ").replace(/\s+OR\s+/, " or ");
+    if (!/^[A-D](?: (?:and|or) [A-D])?$/.test(letter)) { problems.push(`${where}: "${raw}" is not an option letter`); continue; }
 
     const hit = questions.get(Number(num));
     if (!hit)                        { problems.push(`${where}: no question with that number`); continue; }

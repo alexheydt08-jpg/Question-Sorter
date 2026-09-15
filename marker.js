@@ -61,6 +61,7 @@ const PROVIDERS = {
     docs: false,                      // images yes, PDFs no
     models: [
       ["deepseek-flash", "DeepSeek Flash — reads images", true],
+      ["deepseek-v4-pro", "DeepSeek V4 Pro — strongest, text only", false],
       ["deepseek-chat", "DeepSeek Chat — text only", false],
       ["deepseek-reasoner", "DeepSeek Reasoner — text only", false]
     ],

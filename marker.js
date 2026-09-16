@@ -1,10 +1,16 @@
 /* ==========================================================================
    AI marker. Saving a marked question as a flashcard is handed to cards.js.
 
-   There is no server: this calls the Anthropic API straight from the browser
+   There is no server: this calls the marking API straight from the browser
    with a key you paste in, kept in this browser's localStorage. No key is ever
    committed or built into the published page — each person brings their own,
    so nobody can spend anyone else's credit.
+
+   Calling an API from a page instead of a server means the API has to allow it.
+   Anthropic opts in explicitly, which is what the "dangerous-direct-browser-
+   access" header asks for. A provider that sends no CORS headers cannot be used
+   from here at all, however good the key is — see reachable() below, which
+   tells that case apart from being offline instead of guessing between them.
    ========================================================================== */
 "use strict";
 
@@ -319,8 +325,7 @@ $("#keytest").onclick = async () => {
         p.convert ? "Reply with OK." : [{ type: "text", text: "Reply with OK." }]))
     });
   } catch {
-    $("#testout").textContent =
-      `Could not reach ${p.label}. Either you are offline, or your browser blocked the request because ${new URL(p.url).host} does not allow calls from a web page — in which case this provider cannot be used from this site.`;
+    $("#testout").textContent = await unreachableMessage(p);
     btn.disabled = false; btn.textContent = "Test connection";
     return;
   }
@@ -645,6 +650,30 @@ function markableWith(content){
   return { ok: true, dropped };
 }
 
+/* Did the request fail because the host is unreachable, or because the browser
+   refused to hand us the reply? A cross-origin refusal and being offline throw
+   exactly the same TypeError, and the two need opposite advice — one is "try
+   again on better wifi", the other is "this provider cannot be used from this
+   site at all". A no-cors probe settles it: the browser will send that request
+   without demanding CORS headers and hand back an opaque response, so it
+   resolves whenever the host answered and throws when nothing was reachable.
+   The probe carries no key and no headers — there is nothing in it to leak. */
+async function reachable(url){
+  try {
+    await fetch(url, { method: "POST", mode: "no-cors", body: "{}" });
+    return true;
+  } catch { return false; }
+}
+
+/* What to tell someone whose request never came back. */
+async function unreachableMessage(p){
+  const host = new URL(p.url).host;
+  return (await reachable(p.url))
+    ? `${host} is reachable, but your browser blocked the reply because ${p.label} does not allow calls from a web page (no CORS headers). `
+      + `This is a limit of ${p.label}, not of your key — nothing here can work around it. Use Anthropic, which permits browser calls, or run this page behind your own server.`
+    : `Could not reach ${host}. You look offline, or something on your network is blocking it. Check your connection and try again.`;
+}
+
 async function callApi(key, model, content, signal){
   const p = P();
   let payload = content;
@@ -660,9 +689,7 @@ async function callApi(key, model, content, signal){
     });
   } catch (e){
     if (e.name === "AbortError") throw e;
-    /* A browser refusing the request for cross-origin reasons throws exactly
-       the same TypeError as being offline. Naming both beats a wrong guess. */
-    throw new Error(`Could not reach ${p.label}. Either you are offline, or your browser blocked the request because ${new URL(p.url).host} does not allow calls from a web page. The browser console will say which.`);
+    throw new Error(await unreachableMessage(p));
   }
 
   if (!res.ok){
@@ -942,7 +969,7 @@ $("#mclear").addEventListener("click", () => {
 });
 
 function validate(){
-  if (!getKey()) return "Add your Anthropic API key at the top of this page first.";
+  if (!getKey()) return `Add your ${P().label} API key at the top of this page first.`;
   if (mode === "combined"){
     if (!files.combined.length) return "Attach the file that holds the question and the answer.";
   } else if (mode === "paper"){

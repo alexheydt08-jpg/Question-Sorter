@@ -24,7 +24,9 @@ from PIL import Image
 GUIDE_WORDS = re.compile(r'criteria|marking guidelines|sample answer|suggested answer|'
                          r'answers could include|marking guide|marks awarded', re.I)
 END_WORDS = re.compile(r'mapping grid|syllabus outcomes assessed|^\s*appendix', re.I | re.M)
-HEADING = re.compile(r'^(?:Question|Q)\s*(\d{1,2})\b', re.I)
+# Some papers put their own reference code in front of the heading —
+# "Q5214 Question 25" — so allow one short token before it.
+HEADING = re.compile(r'^(?:[A-Za-z]\d{3,6}\s+)?(?:Question|Q)\s*(\d{1,2})\b(?!\d)', re.I)
 # Some papers head a question with the bare number and its part — "21 a.",
 # "22 b. (i)" — which is too weak a pattern to trust on its own, so it is
 # only accepted for a question number the caller is actually looking for.
@@ -110,11 +112,18 @@ def guideline_pages(doc):
     last = len(scored) - 1 - scored[::-1].index(True)
     return first, last
 
-def _guidelines_follow(entries, i, page_height):
-    """Do marking guidelines start just below this line?"""
+def _guidelines_follow(entries, i, page_height, next_page=None):
+    """Do marking guidelines start just below this line?
+
+    A heading can be the last thing on a page, with its guidelines overleaf,
+    so when nothing useful follows on this page look at the top of the next
+    one rather than rejecting the heading."""
     y0 = entries[i][1]
     ahead = " ".join(t for t, y in entries[i + 1:i + 9] if y0 < y <= y0 + LOOKAHEAD)
-    return bool(GUIDE_WORDS.search(ahead))
+    if GUIDE_WORDS.search(ahead): return True
+    if next_page and y0 > page_height * 0.72:
+        return bool(GUIDE_WORDS.search(" ".join(t for t, _ in next_page[:8])))
+    return False
 
 def headings(doc, lo, hi, wanted=None):
     """Where each question's guidelines begin: (question, page, y).
@@ -126,16 +135,21 @@ def headings(doc, lo, hi, wanted=None):
     from being mistaken for the start of a question."""
     want = set(wanted or ())
     out = []
+    by_page = {}
+    for pno in range(lo, hi + 1):
+        rows = []
+        for block in doc[pno].get_text('dict')['blocks']:
+            if block.get('type') != 0: continue
+            for line in block['lines']:
+                rows.append(("".join(s['text'] for s in line['spans']).strip(),
+                             line['bbox'][1]))
+        rows.sort(key=lambda t: t[1])
+        by_page[pno] = rows
     for pno in range(lo, hi + 1):
         page = doc[pno]
         h = page.rect.height
-        entries = []
-        for block in page.get_text('dict')['blocks']:
-            if block.get('type') != 0: continue
-            for line in block['lines']:
-                entries.append(("".join(s['text'] for s in line['spans']).strip(),
-                                line['bbox'][1]))
-        entries.sort(key=lambda t: t[1])
+        entries = by_page[pno]
+        nxt = by_page.get(pno + 1)
         for i, (text, y) in enumerate(entries):
             n = None
             m = HEADING.match(text)
@@ -146,7 +160,7 @@ def headings(doc, lo, hi, wanted=None):
                 if m:
                     cand = int(m.group(1) or m.group(2))
                     if (cand in want and h * MARGIN < y < h * (1 - MARGIN)
-                            and _guidelines_follow(entries, i, h)):
+                            and _guidelines_follow(entries, i, h, nxt)):
                         n = cand
             if n is not None and 1 <= n <= 60:
                 out.append((n, pno, y))
@@ -311,6 +325,8 @@ def _lines_headings(lines_by_page, lo, hi, wanted, doc_height=842.0):
     for pno in range(lo, hi + 1):
         entries = sorted(((t.strip(), y) for t, y in lines_by_page.get(pno, [])),
                          key=lambda t: t[1])
+        nxt = sorted(((t.strip(), y) for t, y in lines_by_page.get(pno + 1, [])),
+                     key=lambda t: t[1])
         h = doc_height
         for i, (text, y) in enumerate(entries):
             n = None
@@ -322,7 +338,7 @@ def _lines_headings(lines_by_page, lo, hi, wanted, doc_height=842.0):
                 if m:
                     cand = int(m.group(1) or m.group(2))
                     if (cand in want and h * MARGIN < y < h * (1 - MARGIN)
-                            and _guidelines_follow(entries, i, h)):
+                            and _guidelines_follow(entries, i, h, nxt)):
                         n = cand
             if n is not None and 1 <= n <= 60:
                 out.append((n, pno, y))

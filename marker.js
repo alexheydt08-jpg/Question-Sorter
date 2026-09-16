@@ -311,28 +311,45 @@ function paintModels(){
 
 /* The one question that cannot be answered from a sandbox: will a browser let
    this page call that host at all? One real request settles it, and separates
-   "blocked" from "bad key" from "no balance". */
+   "blocked" from "bad key" from "no balance".
+
+   The probe is built the way a real marking request is built — same model, same
+   content shape, and the answer is read back with the same reader. A test that
+   posts a bare string and is happy with any 200 can say "Connected" about a
+   path marking never takes, which is worse than not testing: it sends you off
+   looking at your key when the key was never the problem. */
 $("#keytest").onclick = async () => {
   const p = P(), key = getKey(), btn = $("#keytest");
   if (!key){ $("#testout").textContent = "Enter a key first, then test it."; return; }
   btn.disabled = true; btn.textContent = "Testing…";
+  const probe = [{ type: "text", text: "Reply with OK." }];
+  const payload = p.convert ? (visionNow() ? p.convert(probe).content
+                                           : flattenForText(probe).text)
+                            : probe;
   let res;
   try {
     res = await fetch(p.url, {
       method: "POST",
       headers: p.headers(key),
-      body: JSON.stringify(p.body($("#model").value || p.models[0][0], "Reply with OK.",
-        p.convert ? "Reply with OK." : [{ type: "text", text: "Reply with OK." }]))
+      body: JSON.stringify(p.body($("#model").value || p.models[0][0], "Reply with OK.", payload))
     });
   } catch {
     $("#testout").textContent = await unreachableMessage(p);
     btn.disabled = false; btn.textContent = "Test connection";
     return;
   }
-  let detail = "";
-  try { detail = (await res.json())?.error?.message || ""; } catch {}
+  let detail = "", answered = null;
+  try {
+    const data = await res.json();
+    detail = data?.error?.message || "";
+    if (res.ok) answered = p.read(data);
+  } catch {}
   $("#testout").textContent =
-      res.ok              ? `Connected. ${p.label} accepted the key and is ready to mark.`
+      res.ok && answered?.text
+                          ? `Connected. ${p.label} accepted the key, answered, and is ready to mark.`
+    : res.ok && answered?.thought
+                          ? `${p.label} accepted the key but spent the reply thinking and never answered. Marking will fail on this model — try the other one.`
+    : res.ok              ? `${p.label} accepted the key but sent an empty reply. Marking is likely to fail — try the other model.`
     : res.status === 401  ? "That key was rejected. Check it is current and has not been revoked."
     : res.status === 402  ? `The key works, but this ${p.label} account has no balance. Top it up before marking.`
     : res.status === 429  ? "The key works, but you are rate limited right now."
@@ -733,18 +750,56 @@ const num = v => {
   return Number.isFinite(n) ? n : null;
 };
 
+/* Every object in the reply, in order, found by walking the braces rather than
+   taking the first "{" and the last "}".
+
+   That shortcut only works when the JSON is the only thing in the reply. A
+   model that reasons out loud before answering — which DeepSeek does unless
+   told not to, and sometimes anyway — puts braces in the prose, and a stray
+   "}" in a closing sentence moves the end. Either one turns a perfectly good
+   answer into "not in the expected format". Walking the string respects
+   strings and escapes, so a brace inside a quoted reason cannot end it. */
+function jsonCandidates(s){
+  const out = [];
+  for (let i = 0; i < s.length; i++){
+    if (s[i] !== "{") continue;
+    let depth = 0, inStr = false, esc = false;
+    for (let j = i; j < s.length; j++){
+      const c = s[j];
+      if (esc){ esc = false; continue; }
+      if (c === "\\" && inStr){ esc = true; continue; }
+      if (c === '"'){ inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === "{") depth++;
+      else if (c === "}" && --depth === 0){
+        try { out.push(JSON.parse(s.slice(i, j + 1))); } catch {}
+        i = j;                       // never start again inside what we just took
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/* A marking verdict, told apart from any other object the model happened to
+   emit — the reasoning sometimes carries a little JSON of its own. */
+const looksLikeVerdict = o => o && typeof o === "object" &&
+  ("marks_awarded" in o || "total_marks_given" in o || "marking_breakdown" in o);
+
 function parseResult(raw){
   let s = raw.trim();
-  if (s.startsWith("```")){
-    s = s.slice(s.indexOf("\n") + 1);
-    if (s.trimEnd().endsWith("```")) s = s.trimEnd().slice(0, -3);
-    s = s.trim();
-  }
+  /* Some deployments emit the chain of thought inline instead of putting it in
+     reasoning_content. It is not part of the answer, so drop it before looking. */
+  s = s.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  /* A fenced block, wherever it sits — not only when the reply opens with it. */
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+
   let obj = null;
   try { obj = JSON.parse(s); } catch {}
-  if (!obj){
-    const a = s.indexOf("{"), b = s.lastIndexOf("}");
-    if (a !== -1 && b > a){ try { obj = JSON.parse(s.slice(a, b+1)); } catch {} }
+  if (!looksLikeVerdict(obj)){
+    const found = jsonCandidates(s);
+    obj = found.find(looksLikeVerdict) || found[0] || obj;
   }
   if (!obj || typeof obj !== "object"){
     const truncated = s.includes("{") && !s.trimEnd().endsWith("}");

@@ -9,6 +9,10 @@
 "use strict";
 
 const MAX_TOKENS = 4000;
+/* DeepSeek counts what it spends thinking against max_tokens, so its budget is
+   larger even with thinking turned off — if a deployment ignores that request,
+   there is still room left for the verdict rather than an empty reply. */
+const DEEPSEEK_MAX_TOKENS = 8000;
 const MAX_FILE_MB = 28;
 const UNSET = "Not set";
 
@@ -72,8 +76,16 @@ const PROVIDERS = {
       "content-type": "application/json",
       "authorization": `Bearer ${key}`
     }),
+    /* DeepSeek's V4 models think before answering unless told not to, and the
+       thinking is charged against max_tokens. A budget sized for the verdict
+       then gets spent on reasoning and the reply comes back with an empty
+       content and finish_reason "length" — which read as "the API replied with
+       nothing". Marking wants one short JSON object and never shows a train of
+       thought, so ask for none. reasoning_effort:"none" is rejected by these
+       models; thinking:{type:"disabled"} is the documented way. */
     body: (model, system, content) => ({
-      model, max_tokens: MAX_TOKENS,
+      model, max_tokens: DEEPSEEK_MAX_TOKENS,
+      thinking: { type: "disabled" },
       messages: [{ role: "system", content: system },
                  { role: "user", content }]
     }),
@@ -95,7 +107,11 @@ const PROVIDERS = {
     read: data => {
       const c = (data.choices || [])[0] || {};
       return { text: (c.message?.content || "").trim(),
-               cut: c.finish_reason === "length" };
+               cut: c.finish_reason === "length",
+               /* Reasoning comes back beside the answer, not inside it. Worth
+                  knowing about: an empty answer next to a full head of
+                  reasoning means the budget went on thinking. */
+               thought: !!(c.message?.reasoning_content || "").trim() };
     }
   }
 };
@@ -668,12 +684,19 @@ async function callApi(key, model, content, signal){
   }
 
   const data = await res.json();
-  const { text, cut } = p.read(data);
-  if (!text) throw new Error("The API replied with nothing. Try marking again.");
+  const { text, cut, thought } = p.read(data);
+  /* Order matters. An empty answer has several causes and they need different
+     advice, so say which one happened rather than falling back on the vaguest
+     of them — "the API replied with nothing" sent people to check their key
+     when the model had simply run out of room before it answered. */
+  if (!text && (cut || thought))
+    throw new Error(`${p.label} spent the whole reply thinking and never reached the answer. `
+      + `Try a shorter answer or fewer attachments, or pick a different model.`);
   if (cut){
     const e = new Error("The reply was cut off before it finished. Try a shorter answer or fewer attachments.");
     e.raw = text; throw e;
   }
+  if (!text) throw new Error("The API replied with nothing. Try marking again.");
   return text;
 }
 

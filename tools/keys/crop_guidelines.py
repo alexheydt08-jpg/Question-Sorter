@@ -303,9 +303,22 @@ def region_text(doc, start, end):
         out.append("\n".join(t for t, y, _, y1 in page_rows(page) if y1 > top and y < bot))
     return "\n".join(out)
 
+# Not every marking scheme announces itself. Neap's sets the descriptors out
+# as dot-leadered bullets that end in the marks they earn — "Gives correct
+# answer . . . . . 2" — and names the band each part is pitched at, with no
+# "Criteria" heading anywhere in sight.
+LEADERS = re.compile(r'(?:\.\s*){3,}\s*\d\b')
+BAND = re.compile(r'\bBands?\s+\d\b')
+# The leader is sometimes a private-use glyph rather than a run of dots, so
+# fall back on the shape itself: a bullet whose line ends in the mark it earns.
+EARNS = re.compile(r'^[\s\u2022\u2023\u25cf\u00b7•-]*\S.{4,150}?\D(\d{1,2})\s*$', re.M)
+
 def reads_like_guidelines(text):
     """Marking guidelines say what earns the marks; a question does not."""
-    return bool(GUIDE_WORDS.search(text or ''))
+    text = text or ''
+    return bool(GUIDE_WORDS.search(text) or BAND.search(text)
+                or len(LEADERS.findall(text)) >= 2
+                or len(EARNS.findall(text)) >= 3)
 
 def crop(doc, start, end, out_prefix, dpi=130, quality=72, max_width=1000):
     """Render the region between two headings, one image per page it spans."""

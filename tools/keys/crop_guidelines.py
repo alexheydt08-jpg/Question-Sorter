@@ -25,14 +25,81 @@ GUIDE_WORDS = re.compile(r'criteria|marking guidelines|sample answer|suggested a
                          r'answers could include|marking guide|marks awarded', re.I)
 END_WORDS = re.compile(r'mapping grid|syllabus outcomes assessed|^\s*appendix', re.I | re.M)
 HEADING = re.compile(r'^(?:Question|Q)\s*(\d{1,2})\b', re.I)
+# Some papers head a question with the bare number and its part — "21 a.",
+# "22 b. (i)" — which is too weak a pattern to trust on its own, so it is
+# only accepted for a question number the caller is actually looking for.
+BARE = re.compile(r'^(\d{1,2})\s*(?:[a-z]\s*)?[.)]?$|^(\d{1,2})\s*[a-z]?\s*[.)]')
+# A line holding nothing but a number is as likely to be the page number as
+# the start of a question, so a bare heading is only believed inside the body
+# of the page and when guidelines follow it.
+MARGIN = 0.07
+LOOKAHEAD = 150.0
+# A "Q24" loose in a line was tried as a heading and turned out to match the
+# running header printed at the top of every page of some papers, which put
+# the crop in the wrong place. Headings must stand on their own line.
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+PRINT_CSS = """
+<meta charset="utf-8">
+<style>
+ body { font: 12pt/1.45 'DejaVu Sans', Arial, sans-serif; color: #000; margin: 0; }
+ table { border-collapse: collapse; width: 100%; margin: 6pt 0 12pt; page-break-inside: auto; }
+ td, th { border: 1px solid #444; padding: 4pt 6pt; vertical-align: top; }
+ tr { page-break-inside: avoid; }
+ p { margin: 4pt 0; }
+ img { max-width: 100%; vertical-align: middle; }
+ img.lost, img[src=""] { display: none; }
+ h1, h2, h3, strong { font-weight: 700; }
+</style>
+"""
 
 def as_pdf(path, workdir):
-    """LibreOffice renders a .docx so its guidelines can be cropped like any page."""
+    """A .docx has no pages until something lays it out.
+
+    LibreOffice cannot open these files, so the document is converted to
+    HTML and printed by the browser that is already installed. The content —
+    the criteria tables, sample answers and diagrams — survives; only the
+    school's original pagination is lost, which does not matter because the
+    crops are cut by heading, not by page."""
     if path.lower().endswith('.pdf'): return path
-    out = os.path.join(workdir, os.path.splitext(os.path.basename(path))[0] + '.pdf')
-    if not os.path.exists(out):
-        subprocess.run(['soffice', '--headless', '--convert-to', 'pdf', '--outdir', workdir, path],
-                       capture_output=True, timeout=300)
+    stem = os.path.splitext(os.path.basename(path))[0]
+    out = os.path.join(workdir, stem + '.pdf')
+    if os.path.exists(out): return out
+    try:
+        import mammoth, base64, tempfile as _tf
+    except ImportError:
+        return None
+
+    def _image(image):
+        """Word stores an equation as an OLE object with a metafile preview.
+
+        A browser cannot draw a .wmf, so those previews would come out as
+        broken-image icons and the formulae in the guidelines would be lost.
+        Convert them with libwmf and hand the browser a PNG."""
+        with image.open() as fh:
+            raw = fh.read()
+        ctype = (image.content_type or '').lower()
+        if 'wmf' in ctype or 'emf' in ctype:
+            with _tf.TemporaryDirectory() as td:
+                src = os.path.join(td, 'e.wmf'); dst = os.path.join(td, 'e.png')
+                open(src, 'wb').write(raw)
+                subprocess.run(['wmf2gd', '-t', 'png', '-o', dst, src],
+                               capture_output=True, timeout=60)
+                if os.path.exists(dst) and os.path.getsize(dst) > 0:
+                    raw, ctype = open(dst, 'rb').read(), 'image/png'
+                else:
+                    return {'src': '', 'class': 'lost'}
+        return {'src': f'data:{ctype};base64,' + base64.b64encode(raw).decode('ascii')}
+
+    html = os.path.join(workdir, stem + '.html')
+    with open(path, 'rb') as fh:
+        body = mammoth.convert_to_html(
+            fh, convert_image=mammoth.images.img_element(_image)).value
+    with open(html, 'w', encoding='utf-8') as fh:
+        fh.write(PRINT_CSS + body)
+    r = subprocess.run(['node', os.path.join(HERE, 'html_to_pdf.mjs'), html, out],
+                       capture_output=True, timeout=600)
     return out if os.path.exists(out) else None
 
 def guideline_pages(doc):
@@ -43,20 +110,46 @@ def guideline_pages(doc):
     last = len(scored) - 1 - scored[::-1].index(True)
     return first, last
 
-def headings(doc, lo, hi):
-    """Where each question's guidelines begin: (question, page, y)."""
+def _guidelines_follow(entries, i, page_height):
+    """Do marking guidelines start just below this line?"""
+    y0 = entries[i][1]
+    ahead = " ".join(t for t, y in entries[i + 1:i + 9] if y0 < y <= y0 + LOOKAHEAD)
+    return bool(GUIDE_WORDS.search(ahead))
+
+def headings(doc, lo, hi, wanted=None):
+    """Where each question's guidelines begin: (question, page, y).
+
+    "Question 24" is unambiguous. A bare "24 a." or a "Q24" buried in a
+    running header is not — plenty of other things on a page start with a
+    number — so those are only read as headings for a question number the
+    caller asked for, which is what keeps a marks column or a numbered list
+    from being mistaken for the start of a question."""
+    want = set(wanted or ())
     out = []
     for pno in range(lo, hi + 1):
         page = doc[pno]
+        h = page.rect.height
+        entries = []
         for block in page.get_text('dict')['blocks']:
             if block.get('type') != 0: continue
             for line in block['lines']:
-                text = "".join(s['text'] for s in line['spans']).strip()
-                m = HEADING.match(text)
-                if not m: continue
+                entries.append(("".join(s['text'] for s in line['spans']).strip(),
+                                line['bbox'][1]))
+        entries.sort(key=lambda t: t[1])
+        for i, (text, y) in enumerate(entries):
+            n = None
+            m = HEADING.match(text)
+            if m:
                 n = int(m.group(1))
-                if 1 <= n <= 60:
-                    out.append((n, pno, line['bbox'][1]))
+            elif want and len(text) <= 24:
+                m = BARE.match(text)
+                if m:
+                    cand = int(m.group(1) or m.group(2))
+                    if (cand in want and h * MARGIN < y < h * (1 - MARGIN)
+                            and _guidelines_follow(entries, i, h)):
+                        n = cand
+            if n is not None and 1 <= n <= 60:
+                out.append((n, pno, y))
     out.sort(key=lambda t: (t[1], t[2]))
     return out
 
@@ -77,7 +170,7 @@ def end_of_guidelines(doc, lo, hi):
                 return (pno, block['bbox'][1])
     return (hi, doc[hi].rect.y1)
 
-def slices(doc):
+def slices(doc, wanted=None):
     """{question number: (start, end)} over the guidelines, in page order.
 
     A question runs from its own heading to the heading of the next question
@@ -87,7 +180,7 @@ def slices(doc):
     pages = guideline_pages(doc)
     if not pages: return {}
     lo, hi = pages
-    marks = headings(doc, lo, hi)
+    marks = headings(doc, lo, hi, wanted)
     if not marks: return {}
     stop = end_of_guidelines(doc, lo, hi)
     marks = [m for m in marks if (m[1], m[2]) < stop]
@@ -159,6 +252,22 @@ def _save(img, path, quality=72):
     else:
         img.save(path, 'WEBP', quality=quality, method=5)
 
+def region_text(doc, start, end):
+    """The text of the region between two headings, as far as the page knows."""
+    (spno, sy), (epno, ey) = start, end
+    out = []
+    for pno in range(spno, min(epno, len(doc) - 1) + 1):
+        page = doc[pno]
+        r = page.rect
+        top = sy if pno == spno else r.y0
+        bot = ey if pno == epno else r.y1
+        out.append(page.get_text(clip=pymupdf.Rect(r.x0, top, r.x1, bot)))
+    return "\n".join(out)
+
+def reads_like_guidelines(text):
+    """Marking guidelines say what earns the marks; a question does not."""
+    return bool(GUIDE_WORDS.search(text or ''))
+
 def crop(doc, start, end, out_prefix, dpi=130, quality=72, max_width=1000):
     """Render the region between two headings, one image per page it spans."""
     (spno, sy), (epno, ey) = start, end
@@ -180,3 +289,66 @@ def crop(doc, start, end, out_prefix, dpi=130, quality=72, max_width=1000):
         saved.append(path)
         if len(saved) >= 4: break        # a question's guidelines are never longer than this
     return saved
+
+
+# ---------------------------------------------------------------------------
+# Scanned guidelines
+#
+# A photographed solutions booklet has no text to search, so the headings are
+# found by reading the rendered page with tesseract. Only the positions come
+# from the recognised text; every crop is still cut from the original page, so
+# a misread word costs nothing a student can see.
+
+def _lines_pages(lines_by_page):
+    """The pages whose recognised text reads like marking guidelines."""
+    hits = sorted(p for p, lines in lines_by_page.items()
+                  if GUIDE_WORDS.search(" ".join(t for t, _ in lines)))
+    return (hits[0], hits[-1]) if hits else None
+
+def _lines_headings(lines_by_page, lo, hi, wanted, doc_height=842.0):
+    want = set(wanted or ())
+    out = []
+    for pno in range(lo, hi + 1):
+        entries = sorted(((t.strip(), y) for t, y in lines_by_page.get(pno, [])),
+                         key=lambda t: t[1])
+        h = doc_height
+        for i, (text, y) in enumerate(entries):
+            n = None
+            m = HEADING.match(text)
+            if m:
+                n = int(m.group(1))
+            elif want and len(text) <= 24:
+                m = BARE.match(text)
+                if m:
+                    cand = int(m.group(1) or m.group(2))
+                    if (cand in want and h * MARGIN < y < h * (1 - MARGIN)
+                            and _guidelines_follow(entries, i, h)):
+                        n = cand
+            if n is not None and 1 <= n <= 60:
+                out.append((n, pno, y))
+    out.sort(key=lambda t: (t[1], t[2]))
+    return out
+
+def slices_ocr(doc, wanted, lines_by_page):
+    """Like slices(), but positioned from recognised text."""
+    pages = _lines_pages(lines_by_page)
+    if not pages: return {}
+    lo, hi = pages
+    marks = _lines_headings(lines_by_page, lo, hi, wanted, doc[lo].rect.height)
+    if not marks: return {}
+    stop = (hi, doc[hi].rect.y1)
+    for pno in range(lo, hi + 1):
+        for text, y in lines_by_page.get(pno, []):
+            if END_WORDS.search(text):
+                stop = (pno, max(0, y - 26)); break
+        else:
+            continue
+        break
+    marks = [m for m in marks if (m[1], m[2]) < stop]
+    if not marks: return {}
+    out = {}
+    for i, (n, pno, y) in enumerate(marks):
+        if n in out: continue
+        nxt = next(((p, yy) for (m, p, yy) in marks[i+1:] if m > n), stop)
+        out[n] = ((pno, y - 6), nxt)
+    return out

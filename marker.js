@@ -21,9 +21,9 @@ const UNSET = "Not set";
    nobody has to paste a saved key again.
 
    Whether pictures can be sent is a property of the MODEL, not the provider:
-   DeepSeek's chat and reasoner models read text only, while deepseek-flash
-   takes images. Each model entry carries its own flag, and the marker asks the
-   selected model rather than the provider — see visionNow() below.
+   DeepSeek's V4 Pro reads text only, while deepseek-flash takes images. Each
+   model entry carries its own flag, and the marker asks the selected model
+   rather than the provider — see visionNow() below.
    -------------------------------------------------------------------------- */
 const PROVIDERS = {
   anthropic: {
@@ -35,7 +35,7 @@ const PROVIDERS = {
     models: [
       ["claude-opus-5", "Opus 5", true],
       ["claude-sonnet-5", "Sonnet 5", true],
-      ["claude-haiku-4-5-20251001", "Haiku 4.5", true]
+      ["claude-haiku-4-5", "Haiku 4.5", true]
     ],
     url: "https://api.anthropic.com/v1/messages",
     headers: key => ({
@@ -59,11 +59,13 @@ const PROVIDERS = {
     hint: "sk-…",
     console: "https://platform.deepseek.com/api_keys",
     docs: false,                      // images yes, PDFs no
+    /* deepseek-chat and deepseek-reasoner were retired on 24 July 2026 and now
+       return an error instead of resolving, so they are not offered: a model
+       that cannot answer is worse than one fewer choice. deepseek-flash is the
+       current name for their latest Flash model and reads images natively. */
     models: [
       ["deepseek-flash", "DeepSeek Flash — reads images", true],
-      ["deepseek-v4-pro", "DeepSeek V4 Pro — strongest, text only", false],
-      ["deepseek-chat", "DeepSeek Chat — text only", false],
-      ["deepseek-reasoner", "DeepSeek Reasoner — text only", false]
+      ["deepseek-v4-pro", "DeepSeek V4 Pro — strongest, text only", false]
     ],
     url: "https://api.deepseek.com/chat/completions",
     headers: key => ({
@@ -653,6 +655,11 @@ async function callApi(key, model, content, signal){
     if (res.status === 401) throw new Error("That key was rejected. Check it is current and has not been revoked.");
     if (res.status === 402) throw new Error(`This ${P().label} account has no balance left. Top it up, then mark again.`);
     if (res.status === 403) throw new Error("That key is not permitted to use this model. Try a different model.");
+    /* A provider that retires a model name answers 400 rather than 404, and the
+       message is usually just "Model Not Exist". Say which name was refused, so
+       the cause is obvious rather than looking like a broken key. */
+    if (res.status === 400 && /model/i.test(detail) && /exist|not found|invalid|unsupported|deprecat/i.test(detail))
+      throw new Error(`${P().label} does not recognise the model "${model}"${detail ? ` (${detail})` : ""}. Pick another model in the "Marked by" box.`);
     if (res.status === 429) throw new Error("Rate limit reached. Wait a moment, then mark again.");
     if (res.status === 413) throw new Error("The attachments are too large. Remove a file or use a smaller scan.");
     if (res.status >= 500)  throw new Error(`${P().label} is having trouble right now. Try again shortly.`);

@@ -104,6 +104,42 @@ def as_pdf(path, workdir):
                        capture_output=True, timeout=600)
     return out if os.path.exists(out) else None
 
+def page_rows(page, clip=None):
+    """Every text line of a page as (text, y, x, y_bottom), in reading order.
+
+    A page can be stored rotated — landscape sheets usually are — and then
+    get_text reports bboxes in the unrotated space while page.rect, pixmap
+    clips and everything we crop with use the rotated one. Mapping the bbox
+    through rotation_matrix puts each line back where a reader sees it. On an
+    unrotated page the matrix is the identity, so this changes nothing."""
+    m = page.rotation_matrix
+    rows = []
+    for block in page.get_text('dict')['blocks']:
+        if block.get('type') != 0: continue
+        for line in block['lines']:
+            r = pymupdf.Rect(line['bbox']) * m
+            r.normalize()
+            if clip is not None and not (clip.x0 - 1 <= (r.x0 + r.x1) / 2 <= clip.x1 + 1
+                                         and clip.y0 - 1 <= (r.y0 + r.y1) / 2 <= clip.y1 + 1):
+                continue
+            rows.append(("".join(sp['text'] for sp in line['spans']).strip(),
+                         r.y0, r.x0, r.y1))
+    rows.sort(key=lambda t: (t[1], t[2]))
+    return rows
+
+def page_blocks(page):
+    """Every text block as (text, y), in the page's displayed coordinates."""
+    m = page.rotation_matrix
+    out = []
+    for block in page.get_text('dict')['blocks']:
+        if block.get('type') != 0: continue
+        r = pymupdf.Rect(block['bbox']) * m
+        r.normalize()
+        out.append((" ".join("".join(sp['text'] for sp in line['spans'])
+                             for line in block['lines']).strip(), r.y0))
+    out.sort(key=lambda t: t[1])
+    return out
+
 def guideline_pages(doc):
     """The pages that carry marking guidelines rather than the exam paper."""
     scored = [bool(GUIDE_WORDS.search(p.get_text())) for p in doc]
@@ -137,14 +173,7 @@ def headings(doc, lo, hi, wanted=None):
     out = []
     by_page = {}
     for pno in range(lo, hi + 1):
-        rows = []
-        for block in doc[pno].get_text('dict')['blocks']:
-            if block.get('type') != 0: continue
-            for line in block['lines']:
-                rows.append(("".join(s['text'] for s in line['spans']).strip(),
-                             line['bbox'][1]))
-        rows.sort(key=lambda t: t[1])
-        by_page[pno] = rows
+        by_page[pno] = [(t, y) for t, y, *_ in page_rows(doc[pno])]
     for pno in range(lo, hi + 1):
         page = doc[pno]
         h = page.rect.height
@@ -175,13 +204,9 @@ def end_of_guidelines(doc, lo, hi):
     cutting at the second line leaves the first hanging off the end of the
     last question's guidelines."""
     for pno in range(lo, hi + 1):
-        page = doc[pno]
-        for block in page.get_text('dict')['blocks']:
-            if block.get('type') != 0: continue
-            text = " ".join("".join(s['text'] for s in line['spans'])
-                            for line in block['lines']).strip()
+        for text, y in page_blocks(doc[pno]):
             if END_WORDS.search(text):
-                return (pno, block['bbox'][1])
+                return (pno, y)
     return (hi, doc[hi].rect.y1)
 
 def slices(doc, wanted=None):
@@ -275,7 +300,7 @@ def region_text(doc, start, end):
         r = page.rect
         top = sy if pno == spno else r.y0
         bot = ey if pno == epno else r.y1
-        out.append(page.get_text(clip=pymupdf.Rect(r.x0, top, r.x1, bot)))
+        out.append("\n".join(t for t, y, _, y1 in page_rows(page) if y1 > top and y < bot))
     return "\n".join(out)
 
 def reads_like_guidelines(text):
@@ -316,16 +341,16 @@ def crop(doc, start, end, out_prefix, dpi=130, quality=72, max_width=1000):
 def _lines_pages(lines_by_page):
     """The pages whose recognised text reads like marking guidelines."""
     hits = sorted(p for p, lines in lines_by_page.items()
-                  if GUIDE_WORDS.search(" ".join(t for t, _ in lines)))
+                  if GUIDE_WORDS.search(" ".join(l[0] for l in lines)))
     return (hits[0], hits[-1]) if hits else None
 
 def _lines_headings(lines_by_page, lo, hi, wanted, doc_height=842.0):
     want = set(wanted or ())
     out = []
     for pno in range(lo, hi + 1):
-        entries = sorted(((t.strip(), y) for t, y in lines_by_page.get(pno, [])),
+        entries = sorted(((l[0].strip(), l[1]) for l in lines_by_page.get(pno, [])),
                          key=lambda t: t[1])
-        nxt = sorted(((t.strip(), y) for t, y in lines_by_page.get(pno + 1, [])),
+        nxt = sorted(((l[0].strip(), l[1]) for l in lines_by_page.get(pno + 1, [])),
                      key=lambda t: t[1])
         h = doc_height
         for i, (text, y) in enumerate(entries):
@@ -354,7 +379,8 @@ def slices_ocr(doc, wanted, lines_by_page):
     if not marks: return {}
     stop = (hi, doc[hi].rect.y1)
     for pno in range(lo, hi + 1):
-        for text, y in lines_by_page.get(pno, []):
+        for line in lines_by_page.get(pno, []):
+            text, y = line[0], line[1]
             if END_WORDS.search(text):
                 stop = (pno, max(0, y - 26)); break
         else:
@@ -368,3 +394,150 @@ def slices_ocr(doc, wanted, lines_by_page):
         nxt = next(((p, yy) for (m, p, yy) in marks[i+1:] if m > n), stop)
         out[n] = ((pno, y - 6), nxt)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Two-column scans
+#
+# A paper photocopied onto A3 puts two portrait columns on one landscape sheet,
+# so "Question 22" and "Question 23" print side by side and share a top edge.
+# Cutting such a page into horizontal bands takes half of one question and half
+# of another. These pages are read as a sequence of columns instead: left then
+# right, page after page, which is the order a reader follows.
+
+def slots_of(doc, pages):
+    """Reading-order columns: [(page number, clip rect)]."""
+    out = []
+    for pno in pages:
+        r = doc[pno].rect
+        if r.width > r.height * 1.15:            # landscape: an A3 two-up scan
+            mid = (r.x0 + r.x1) / 2
+            out.append((pno, pymupdf.Rect(r.x0, r.y0, mid, r.y1)))
+            out.append((pno, pymupdf.Rect(mid, r.y0, r.x1, r.y1)))
+        else:
+            out.append((pno, r))
+    return out
+
+def slot_lines(doc, slots, ocr):
+    """Recognised lines per column, so a heading is found in its own column."""
+    out = {}
+    for i, (pno, rect) in enumerate(slots):
+        page = doc[pno]
+        if ocr:
+            out[i] = [(l[0], l[1]) for l in ocr(page, rect)]
+        else:
+            out[i] = [(t, y) for t, y, *_ in page_rows(page, rect)]
+    return out
+
+def slices_by_column(doc, wanted, slots, lines_by_slot):
+    """{question: ((slot, y), (slot, y))} following the columns in order."""
+    keep = [i for i, l in lines_by_slot.items()
+            if GUIDE_WORDS.search(" ".join(t for t, _ in l))]
+    if not keep: return {}
+    lo, hi = min(keep), max(keep)
+    marks = []
+    for i in range(lo, hi + 1):
+        rect = slots[i][1]
+        h = rect.height
+        entries = lines_by_slot.get(i, [])
+        for j, (text, y) in enumerate(entries):
+            n = None
+            m = HEADING.match(text)
+            if m: n = int(m.group(1))
+            elif wanted and len(text) <= 24:
+                m = BARE.match(text)
+                if m:
+                    cand = int(m.group(1) or m.group(2))
+                    if (cand in set(wanted) and rect.y0 + h * MARGIN < y < rect.y1 - h * MARGIN
+                            and _guidelines_follow(entries, j, h)):
+                        n = cand
+            if n is not None and 1 <= n <= 60:
+                marks.append((n, i, y))
+    if not marks: return {}
+    marks.sort(key=lambda t: (t[1], t[2]))
+    stop = (hi, slots[hi][1].y1)
+
+    # A question can be headed more than once. These scans staple the paper's
+    # errata onto its guidelines — "Question 24(a) Answer should be ..." — and
+    # elsewhere a question is mentioned in passing. Neither is that question's
+    # guidelines, and picking the first or the longest match gets it wrong both
+    # ways round.
+    #
+    # What separates the real headings from the rest is that guidelines run in
+    # question order, front to back. So keep the longest run of headings whose
+    # numbers increase through the document and drop everything off it: an
+    # erratum for question 24 sitting in front of question 22's guidelines
+    # cannot be part of that run, however it is worded.
+    best = _rising_run(marks)
+    if not best: return {}
+    out = {}
+    for k, (n, i, y) in enumerate(best):
+        nxt = (best[k+1][1], best[k+1][2]) if k + 1 < len(best) else stop
+        out[n] = ((i, y - 4), nxt)
+
+    # Some papers bind the exam and its guidelines into one file, so a question
+    # is headed twice — once where it is asked, once where it is marked — and
+    # both headings sit on the rising run. Cropping the first would put the
+    # question on the back of the card instead of its answer, so where a span
+    # does not read like guidelines, take a later heading for that same
+    # question that does, and if there is none, leave the question uncut.
+    for n in list(out):
+        if reads_like_guidelines(column_text(lines_by_slot, *out[n])): continue
+        alt = None
+        for k, (m, i, y) in enumerate(marks):
+            if m != n or (i, y - 4) == out[n][0]: continue
+            nxt = next(((p, yy) for (q, p, yy) in marks[k+1:] if q > n), stop)
+            span = ((i, y - 4), nxt)
+            if reads_like_guidelines(column_text(lines_by_slot, *span)):
+                alt = span; break
+        if alt: out[n] = alt
+        else: del out[n]
+    return out
+
+def column_text(lines_by_slot, start, end):
+    """The text of a span that runs from one column into another."""
+    (si, sy), (ei, ey) = start, end
+    parts = []
+    for i in range(si, ei + 1):
+        for t, y in lines_by_slot.get(i, []):
+            if (i > si or y >= sy - 8) and (i < ei or y <= ey + 8):
+                parts.append(t)
+    return " ".join(parts)
+
+def _rising_run(marks):
+    """The longest run of headings, in page order, whose numbers increase."""
+    if not marks: return []
+    best_len = [1] * len(marks)
+    prev = [-1] * len(marks)
+    for i in range(len(marks)):
+        for j in range(i):
+            if marks[j][0] < marks[i][0] and best_len[j] + 1 > best_len[i]:
+                best_len[i] = best_len[j] + 1
+                prev[i] = j
+    end = max(range(len(marks)), key=lambda i: best_len[i])
+    run = []
+    while end != -1:
+        run.append(marks[end]); end = prev[end]
+    return run[::-1]
+
+def crop_columns(doc, slots, start, end, out_prefix, dpi=150, quality=72, max_width=1000):
+    """Render the region between two headings, one image per column it spans."""
+    (si, sy), (ei, ey) = start, end
+    saved = []
+    for i in range(si, min(ei, len(slots) - 1) + 1):
+        pno, rect = slots[i]
+        top = sy if i == si else rect.y0
+        bot = ey if i == ei else rect.y1
+        if bot - top < 18: continue
+        clip = pymupdf.Rect(rect.x0, max(rect.y0, top), rect.x1, min(rect.y1, bot))
+        pix = doc[pno].get_pixmap(dpi=dpi, clip=clip)
+        img = Image.open(io.BytesIO(pix.tobytes('png'))).convert('RGB')
+        img = _trim(img)
+        if img is None or img.width < 60 or img.height < 40: continue
+        if img.width > max_width:
+            img = img.resize((max_width, max(1, round(img.height * max_width / img.width))), Image.LANCZOS)
+        path = f'{out_prefix}-mg{len(saved)}.webp'
+        _save(img, path, quality)
+        saved.append(path)
+        if len(saved) >= 4: break
+    return saved

@@ -18,10 +18,16 @@ def _tsv(png, timeout=180):
                          capture_output=True, text=True, timeout=timeout)
     return out.stdout
 
-def page_lines(page, dpi=150):
-    """[(text, y_top)] for a rendered page, in reading order."""
-    pix = page.get_pixmap(dpi=dpi)
-    scale = page.rect.height / pix.height
+def page_lines(page, clip=None, dpi=150):
+    """[(text, y_top, x_left)] for a rendered page, top to bottom.
+
+    The left edge matters as much as the top: a paper photocopied onto A3
+    prints two columns per sheet, and a question in the right-hand column
+    starts level with a different question on the left."""
+    pix = page.get_pixmap(dpi=dpi, clip=clip)
+    box = clip or page.rect
+    scale = box.height / pix.height
+    x0, y0 = box.x0, box.y0
     with tempfile.TemporaryDirectory() as td:
         png = os.path.join(td, 'p.png')
         pix.save(png)
@@ -43,8 +49,9 @@ def page_lines(page, dpi=150):
     for words in lines.values():
         words.sort()
         text = " ".join(w for _, _, w in words)
-        y = min(t for _, t, _ in words) * scale
-        out.append((text, y))
+        y = y0 + min(t for _, t, _ in words) * scale
+        x = x0 + min(l for l, _, _ in words) * scale
+        out.append((text, y, x))
     out.sort(key=lambda t: t[1])
     return out
 

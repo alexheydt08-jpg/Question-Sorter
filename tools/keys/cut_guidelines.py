@@ -50,8 +50,23 @@ def best_source(sources, wanted):
         if not path or not path.lower().endswith('.pdf'): continue
         try: doc = pymupdf.open(path)
         except Exception: continue
-        if sum(len(p.get_text().strip()) for p in doc) > 2000: continue
-        lines = ocr_lines.doc_lines(doc)
+        # Judging the whole file by its total text misses the common case: a
+        # paper whose exam is typed and whose solutions are scanned in at the
+        # back. Read each page the way that page needs, and only pay for OCR
+        # on the pages that have nothing to read.
+        lines = {}
+        for pno, page in enumerate(doc):
+            own = page.get_text().strip()
+            if len(own) >= 150:
+                rows = []
+                for block in page.get_text('dict')['blocks']:
+                    if block.get('type') != 0: continue
+                    for line in block['lines']:
+                        rows.append(("".join(sp['text'] for sp in line['spans']).strip(),
+                                     line['bbox'][1]))
+                lines[pno] = sorted(rows, key=lambda t: t[1])
+            else:
+                lines[pno] = ocr_lines.page_lines(page)
         sl = cg.slices_ocr(doc, wanted, lines)
         hit = sum(1 for q in wanted if q in sl)
         if hit > best[2]:

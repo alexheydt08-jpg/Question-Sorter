@@ -21,8 +21,14 @@ import os, re, io, subprocess, tempfile
 import pymupdf
 from PIL import Image
 
+# Phrases a marking scheme uses and a question paper does not. The band
+# descriptors matter as much as the headings: plenty of schools set their
+# criteria out with no heading at all, in the words NESA marks to.
 GUIDE_WORDS = re.compile(r'criteria|marking guidelines|sample answer|suggested answer|'
-                         r'answers could include|marking guide|marks awarded', re.I)
+                         r'answers (?:could|may|might) include|marking guide|marks awarded|'
+                         r'targeted performance bands?|outcomes assessed|'
+                         r'sketches in general terms|provides? some relevant information|'
+                         r'demonstrates? (?:extensive|thorough|sound|limited|factually)', re.I)
 END_WORDS = re.compile(r'mapping grid|syllabus outcomes assessed|^\s*appendix', re.I | re.M)
 # Some papers put their own reference code in front of the heading —
 # "Q5214 Question 25" — so allow one short token before it.
@@ -103,6 +109,23 @@ def as_pdf(path, workdir):
     r = subprocess.run(['node', os.path.join(HERE, 'html_to_pdf.mjs'), html, out],
                        capture_output=True, timeout=600)
     return out if os.path.exists(out) else None
+
+# Not every marking scheme announces itself. Neap's sets the descriptors out
+# as dot-leadered bullets that end in the marks they earn — "Gives correct
+# answer . . . . . 2" — and names the band each part is pitched at, with no
+# "Criteria" heading anywhere in sight.
+LEADERS = re.compile(r'(?:\.\s*){3,}\s*\d\b')
+BAND = re.compile(r'\bBands?\s+\d\b')
+# The leader is sometimes a private-use glyph rather than a run of dots, so
+# fall back on the shape itself: a bullet whose line ends in the mark it earns.
+EARNS = re.compile(r'^[\s\u2022\u2023\u25cf\u00b7•-]*\S.{4,150}?\D(\d{1,2})\s*$', re.M)
+
+def reads_like_guidelines(text):
+    """Marking guidelines say what earns the marks; a question does not."""
+    text = text or ''
+    return bool(GUIDE_WORDS.search(text) or BAND.search(text)
+                or len(LEADERS.findall(text)) >= 2
+                or len(EARNS.findall(text)) >= 3)
 
 def page_rows(page, clip=None):
     """Every text line of a page as (text, y, x, y_bottom), in reading order.
@@ -302,23 +325,6 @@ def region_text(doc, start, end):
         bot = ey if pno == epno else r.y1
         out.append("\n".join(t for t, y, _, y1 in page_rows(page) if y1 > top and y < bot))
     return "\n".join(out)
-
-# Not every marking scheme announces itself. Neap's sets the descriptors out
-# as dot-leadered bullets that end in the marks they earn — "Gives correct
-# answer . . . . . 2" — and names the band each part is pitched at, with no
-# "Criteria" heading anywhere in sight.
-LEADERS = re.compile(r'(?:\.\s*){3,}\s*\d\b')
-BAND = re.compile(r'\bBands?\s+\d\b')
-# The leader is sometimes a private-use glyph rather than a run of dots, so
-# fall back on the shape itself: a bullet whose line ends in the mark it earns.
-EARNS = re.compile(r'^[\s\u2022\u2023\u25cf\u00b7•-]*\S.{4,150}?\D(\d{1,2})\s*$', re.M)
-
-def reads_like_guidelines(text):
-    """Marking guidelines say what earns the marks; a question does not."""
-    text = text or ''
-    return bool(GUIDE_WORDS.search(text) or BAND.search(text)
-                or len(LEADERS.findall(text)) >= 2
-                or len(EARNS.findall(text)) >= 3)
 
 def crop(doc, start, end, out_prefix, dpi=130, quality=72, max_width=1000):
     """Render the region between two headings, one image per page it spans."""
